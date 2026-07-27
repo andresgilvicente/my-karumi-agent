@@ -1,0 +1,13 @@
+[project]
+name = "my-karumi-agent"
+version = "0.1.0"
+description = "A voice-guided product demo of Metric Master Suite"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fastapi==0.140.0",
+    "uvicorn[standard]==0.51.0",
+]
+
+[tool.uv]
+package = false
