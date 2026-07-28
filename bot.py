@@ -19,6 +19,7 @@ from pipecat.frames.frames import (
     MetricsFrame,
     TTSSpeakFrame,
     TranscriptionFrame,
+    UserStoppedSpeakingFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
 )
@@ -49,6 +50,7 @@ from pipecat.workers.runner import WorkerRunner
 
 from ui_control.catalog import load_catalog
 from ui_control.processor import UIActionExecutor, UIActionToolChoiceProcessor
+from ui_control.profiling import LocalVoiceProfile, create_local_profile
 
 # ---------------------------------------------------------------------------
 # Config — change these to swap models / voices without touching the pipeline.
@@ -146,11 +148,19 @@ TRANSPORT_PARAMS = {
 class VoiceMetricsObserver(BaseObserver):
     """Log complete conversation turns and optional native service timing metrics."""
 
-    def __init__(self, *, stt_name: str, llm_name: str, tts_name: str):
+    def __init__(
+        self,
+        *,
+        stt_name: str,
+        llm_name: str,
+        tts_name: str,
+        profile: LocalVoiceProfile | None = None,
+    ):
         super().__init__()
         self._stt_name = stt_name
         self._llm_name = llm_name
         self._tts_name = tts_name
+        self._profile = profile
         self._speech_end_time: float | None = None
         self._tts_processing_total = 0.0
         self._tts_ttfa_logged = False
@@ -176,14 +186,27 @@ class VoiceMetricsObserver(BaseObserver):
             self._tts_processing_total = 0.0
             self._tts_ttfa_logged = False
             logger.debug("[TURN] User started speaking")
+            if self._profile:
+                self._profile.start_turn()
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._speech_end_time = frame.timestamp - frame.stop_secs
             logger.debug("[TURN] User stopped speaking")
+            if self._profile:
+                self._profile.speech_ended(silence_confirmation_ms=frame.stop_secs * 1000)
+        elif isinstance(frame, UserStoppedSpeakingFrame):
+            if self._profile and self._speech_end_time is not None:
+                self._profile.logical_turn_closed(
+                    (time.time() - self._speech_end_time) * 1000
+                )
         elif isinstance(frame, TranscriptionFrame):
             logger.opt(colors=True).info("<cyan>[USER]</cyan> {}", frame.text.strip())
+            transcription_latency_ms = None
             if self._speech_end_time is not None:
                 latency = time.time() - self._speech_end_time
                 logger.debug(f"[LATENCY] End of user speech -> transcription: {latency:.3f}s")
+                transcription_latency_ms = latency * 1000
+            if self._profile:
+                self._profile.transcription_received(frame.text, transcription_latency_ms)
         elif isinstance(frame, LLMFullResponseStartFrame):
             self._llm_response = []
         elif isinstance(frame, LLMTextFrame):
@@ -197,23 +220,38 @@ class VoiceMetricsObserver(BaseObserver):
             log_agent_response(frame.text.strip())
         elif isinstance(frame, MetricsFrame):
             self._handle_metrics(frame)
-        elif isinstance(frame, BotStoppedSpeakingFrame) and self._tts_processing_total > 0:
-            logger.debug(
-                f"[LATENCY] TTS generation total across segments: "
-                f"{self._tts_processing_total:.3f}s"
-            )
+        elif isinstance(frame, BotStoppedSpeakingFrame):
+            if self._tts_processing_total > 0:
+                logger.debug(
+                    f"[LATENCY] TTS generation total across segments: "
+                    f"{self._tts_processing_total:.3f}s"
+                )
+            if self._profile:
+                self._profile.bot_stopped_speaking(
+                    self._tts_processing_total * 1000
+                    if self._tts_processing_total > 0
+                    else None
+                )
             self._speech_end_time = None
+            self._tts_processing_total = 0.0
+            self._tts_ttfa_logged = False
 
     def _handle_metrics(self, frame: MetricsFrame):
         for metric in frame.data:
             if isinstance(metric, ProcessingMetricsData):
                 if metric.processor == self._stt_name:
                     logger.debug(f"[LATENCY] STT processing: {metric.value:.3f}s")
+                    if self._profile:
+                        self._profile.service_metric("stt", "processing", metric.value * 1000)
                 elif metric.processor == self._llm_name:
                     logger.debug(f"[LATENCY] LLM total: {metric.value:.3f}s")
+                    if self._profile:
+                        self._profile.service_metric("llm", "processing", metric.value * 1000)
                 elif metric.processor == self._tts_name:
                     self._tts_processing_total += metric.value
                     logger.debug(f"[LATENCY] TTS segment total: {metric.value:.3f}s")
+                    if self._profile:
+                        self._profile.service_metric("tts", "processing", metric.value * 1000)
             elif (
                 isinstance(metric, TTFAMetricsData)
                 and metric.processor == self._tts_name
@@ -221,15 +259,35 @@ class VoiceMetricsObserver(BaseObserver):
             ):
                 self._tts_ttfa_logged = True
                 logger.debug(f"[LATENCY] TTS TTFA: {metric.ttfa:.3f}s")
+                if self._profile:
+                    self._profile.service_metric("tts", "ttfa", metric.ttfa * 1000)
 
 
 # ---------------------------------------------------------------------------
 # Pipeline
 # ---------------------------------------------------------------------------
-async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
+async def run_bot(
+    transport: BaseTransport,
+    runner_args: RunnerArguments,
+    profile: LocalVoiceProfile | None = None,
+) -> None:
     current_ui_state: dict | None = None
     pending_ui_actions: dict[str, tuple[asyncio.Future, str, dict]] = {}
     worker: PipelineWorker | None = None
+
+    if profile:
+        profile.start_run(
+            {
+                "stt_model": STT_MODEL,
+                "stt_language": str(STT_LANGUAGE),
+                "llm_model": LLM_MODEL,
+                "tts_voice": TTS_VOICE,
+                "tts_language": str(TTS_LANGUAGE),
+                "user_speech_timeout_secs": USER_SPEECH_TIMEOUT_SECS,
+                "ui_action_timeout_secs": UI_ACTION_TIMEOUT_SECS,
+                "ui_contract_version": UI_CATALOG.contract_version,
+            }
+        )
 
     def instruction_with_ui_state() -> str:
         if current_ui_state is None:
@@ -272,12 +330,33 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     async def execute_ui_action(command: str, payload: dict) -> dict:
         """Send one semantic command and wait for the React confirmation."""
+        action_id = uuid4().hex
+        command_id: str | None = None
+        started_at = time.monotonic()
+
+        def profile_result(outcome: str, code: str | None = None) -> None:
+            if profile:
+                profile.ui_action_finished(
+                    action_id,
+                    command_id,
+                    command,
+                    payload,
+                    outcome,
+                    (time.monotonic() - started_at) * 1000,
+                    code,
+                )
+
         if worker is None or not UI_CATALOG.supports_action(current_ui_state, command, payload):
+            if profile:
+                profile.ui_action_started(action_id, None, command, payload)
+            profile_result("error", "ui_state_unavailable")
             return {"status": "error", "code": "ui_state_unavailable"}
 
         command_id = uuid4().hex
         confirmation = asyncio.get_running_loop().create_future()
         pending_ui_actions[command_id] = (confirmation, command, payload)
+        if profile:
+            profile.ui_action_started(action_id, command_id, command, payload)
         logger.opt(colors=True).info("<yellow>[UI]</yellow> Sending {}: {}", command, payload)
 
         try:
@@ -290,15 +369,18 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             result = await asyncio.wait_for(confirmation, timeout=UI_ACTION_TIMEOUT_SECS)
         except TimeoutError:
             logger.opt(colors=True).warning("<yellow>[UI]</yellow> Command {} timed out", command_id)
+            profile_result("timeout", "action_timeout")
             return {"status": "timeout", "action": command}
         except Exception as error:
             logger.opt(colors=True).warning("<yellow>[UI]</yellow> Command {} failed: {}", command_id, error)
+            profile_result("error", "command_failed")
             return {"status": "error", "action": command, "code": "command_failed"}
         finally:
             pending_ui_actions.pop(command_id, None)
 
         if result.get("status") != "ok":
             logger.opt(colors=True).warning("<yellow>[UI]</yellow> {} failed: {}", command, result)
+            profile_result("error", result.get("code", "action_failed"))
             return {
                 "status": "error",
                 "action": command,
@@ -306,6 +388,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             }
 
         logger.opt(colors=True).info("<yellow>[UI]</yellow> {} confirmed", command)
+        profile_result("confirmed")
         return {
             "status": "confirmed",
             "action": command,
@@ -314,13 +397,19 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     context = LLMContext()
     ui_actions = UIActionExecutor(UI_CATALOG, execute_ui_action, lambda: current_ui_state)
-    ui_tools = ui_actions.build_tools(context)
+
+    def record_resolution(resolution: str, details: dict) -> None:
+        if profile:
+            profile.resolution(resolution, details)
+
+    ui_tools = ui_actions.build_tools(context, record_resolution)
     ui_intent_gate = UIActionToolChoiceProcessor(
         context,
         UI_CATALOG,
         ui_tools,
         ui_actions.execute,
         ui_actions.response_for,
+        record_resolution,
     )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
@@ -342,15 +431,20 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         stt_name=stt.name,
         llm_name=llm.name,
         tts_name=tts.name,
+        profile=profile,
     )
 
     @latency_observer.event_handler("on_first_bot_speech_latency")
     async def on_first_bot_speech_latency(observer, latency):
         logger.debug(f"[LATENCY] Client connected -> first bot audio: {latency:.3f}s")
+        if profile:
+            profile.first_bot_audio(latency * 1000, startup=True)
 
     @latency_observer.event_handler("on_latency_measured")
     async def on_latency_measured(observer, latency):
         logger.debug(f"[LATENCY] End of user speech -> first bot audio: {latency:.3f}s")
+        if profile:
+            profile.first_bot_audio(latency * 1000, startup=False)
 
     @latency_observer.event_handler("on_latency_breakdown")
     async def on_latency_breakdown(observer, breakdown):
@@ -468,11 +562,15 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
         logger.opt(colors=True).info("<magenta>[SESSION]</magenta> Connected")
+        if profile:
+            profile.start_session()
         await worker.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.opt(colors=True).info("<magenta>[SESSION]</magenta> Disconnected")
+        if profile:
+            profile.end_session("disconnected")
         await worker.cancel()
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
@@ -482,8 +580,13 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
 async def bot(runner_args: RunnerArguments) -> None:
     configure_logging(debug_logs_enabled(runner_args))
-    transport = await create_transport(runner_args, TRANSPORT_PARAMS)
-    await run_bot(transport, runner_args)
+    profile = create_local_profile()
+    try:
+        transport = await create_transport(runner_args, TRANSPORT_PARAMS)
+        await run_bot(transport, runner_args, profile)
+    finally:
+        if profile:
+            profile.close()
 
 
 if __name__ == "__main__":

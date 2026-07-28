@@ -18,6 +18,7 @@ Updated: 2026-07-28
 - Backend orchestration: dynamic React state in the LLM instruction, catalog-derived tool schemas, five-second action timeouts, confirmation-aware responses, and deterministic dispatch for explicit allowlisted requests.
 - Context safety: deterministic turns commit the user request and confirmed assistant response before audio synthesis, so an interruption does not erase the confirmed action from later LLM context.
 - Kokoro applies Pipecat's sentence-level Markdown filter before synthesis so emphasis markers are not pronounced without changing Qwen's response generation.
+- Optional local profiling correlates VAD, logical turn completion, STT/LLM/TTS metrics, first audio, resolution path, and confirmed UI action timing in JSONL without changing normal runtime behavior.
 - Navigation compounds the expected focus action: Dashboard highlights Total Revenue, Analytics highlights Traffic Overview, and Team scrolls to the member list.
 
 ## Current Constraints
@@ -40,6 +41,7 @@ Updated: 2026-07-28
 - Backend logs confirmed a matching `status: ok` result for every navigation and focus `commandId` before the agent reported success.
 - On 2026-07-28, the catalog refactor passed ten standard-library UI-control tests, Python compilation/import, and a Linux Node 24 production build. Manual regression checks passed normal conversation, all three navigation/focus flows, a split navigation request, and sidebar navigation before a voice command.
 - On 2026-07-28, Pipecat's sentence-level Markdown filter passed focused automated cases for bold, italic, underscore, inline-code, and plain text; a manual greeting check confirmed that section names are spoken naturally without formatting symbols.
+- On 2026-07-28, the opt-in JSONL profiler passed standard-library tests for disabled behavior, correlated turn/action records, interruption summaries, Python compilation, and import.
 
 ## Relevant Files
 
@@ -58,5 +60,6 @@ Updated: 2026-07-28
 
 1. Treat the current three-route vertical demo as the baseline and avoid expanding the command surface without a concrete demo need.
 2. If broader phrasing becomes necessary, replace or augment the compact semantic resolver without weakening the command allowlists or confirmation contract.
-3. Profile conversational latency separately from deterministic UI actions; defer model or TTS changes unless measured behavior blocks the demo.
-4. Keep the standard-library semantic UI tests current whenever the catalog changes; introduce broader test infrastructure only when the surface grows beyond this small contract.
+3. Collect the fixed local latency corpus before changing model or timeout settings; profile conversational latency separately from deterministic UI actions.
+4. Build the autonomous guided-demo sequence on the confirmed Dashboard, Analytics, and Team actions without widening the frontend command contract.
+5. Keep the standard-library semantic UI tests current whenever the catalog changes; introduce broader test infrastructure only when the surface grows beyond this small contract.

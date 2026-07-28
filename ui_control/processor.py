@@ -89,7 +89,11 @@ class UIActionExecutor:
             return self._catalog.views[payload["view"]]["successMessage"]
         return self._catalog.targets[payload["target"]]["successMessage"]
 
-    def build_tools(self, context: LLMContext) -> dict[str, FunctionSchema]:
+    def build_tools(
+        self,
+        context: LLMContext,
+        on_resolution: Callable[[str, dict], None] | None = None,
+    ) -> dict[str, FunctionSchema]:
         async def finish_tool_call(params: FunctionCallParams, result: dict) -> None:
             context.set_tools([])
             context.set_tool_choice("auto")
@@ -97,6 +101,8 @@ class UIActionExecutor:
 
         async def handle_navigation(params: FunctionCallParams) -> None:
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: function_call")
+            if on_resolution:
+                on_resolution("function_call", {"command": "navigate_to"})
             await finish_tool_call(
                 params,
                 await self.execute("navigate_to", {"view": params.arguments.get("view")}),
@@ -104,6 +110,8 @@ class UIActionExecutor:
 
         async def handle_highlight(params: FunctionCallParams) -> None:
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: function_call")
+            if on_resolution:
+                on_resolution("function_call", {"command": "highlight"})
             await finish_tool_call(
                 params,
                 await self.execute("highlight", {"target": params.arguments.get("target")}),
@@ -111,6 +119,8 @@ class UIActionExecutor:
 
         async def handle_scroll(params: FunctionCallParams) -> None:
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: function_call")
+            if on_resolution:
+                on_resolution("function_call", {"command": "scroll_to"})
             await finish_tool_call(
                 params,
                 await self.execute("scroll_to", {"target": params.arguments.get("target")}),
@@ -167,6 +177,7 @@ class UIActionToolChoiceProcessor(FrameProcessor):
         tools: dict[str, FunctionSchema],
         execute_action: Callable[[str, dict], Awaitable[dict]],
         response_for: Callable[[str, dict, dict], str],
+        on_resolution: Callable[[str, dict], None] | None = None,
     ):
         super().__init__()
         self._context = context
@@ -174,6 +185,7 @@ class UIActionToolChoiceProcessor(FrameProcessor):
         self._tools = tools
         self._execute_action = execute_action
         self._response_for = response_for
+        self._on_resolution = on_resolution
         self._previous_transcript = ""
         self._previous_transcript_at = 0.0
 
@@ -198,6 +210,8 @@ class UIActionToolChoiceProcessor(FrameProcessor):
             self._context.set_tool_choice("auto")
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: deterministic")
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Deterministic intent: {} {}", command, payload)
+            if self._on_resolution:
+                self._on_resolution("deterministic", {"command": command, **payload})
             result = await self._execute_action(command, payload)
             response = self._response_for(command, payload, result)
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Deterministic result: {}", result)
@@ -212,8 +226,14 @@ class UIActionToolChoiceProcessor(FrameProcessor):
         self._context.set_tool_choice("required" if selected_tool else "auto")
         if selected_tool is None:
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: conversation")
+            if self._on_resolution:
+                self._on_resolution("conversation", {})
         else:
             logger.opt(colors=True).debug(
                 "<yellow>[UI]</yellow> Resolution path: function_call candidate ({})", selected_tool_name
             )
+            if self._on_resolution:
+                self._on_resolution(
+                    "function_call_candidate", {"command": selected_tool_name}
+                )
         await self.push_frame(frame, direction)
