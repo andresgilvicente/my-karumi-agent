@@ -1,6 +1,7 @@
 import unittest
 
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter
 
 from ui_control.catalog import load_catalog
 from ui_control.intents import resolve_ui_intent
@@ -167,3 +168,20 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
                 },
             ],
         )
+
+    async def test_spoken_text_removes_markdown_formatting(self):
+        text_filter = MarkdownTextFilter()
+        cases = {
+            "Visit **Dashboard** next.": "Visit Dashboard next.",
+            "Open *Analytics*.": "Open Analytics.",
+            "Go to __Team__.": "Go to Team.",
+            "Focus on `Traffic Overview`.": "Focus on Traffic Overview.",
+        }
+        for source, expected in cases.items():
+            with self.subTest(source=source):
+                self.assertEqual(await text_filter.filter(source), expected)
+
+    async def test_spoken_text_leaves_plain_responses_unchanged(self):
+        text_filter = MarkdownTextFilter()
+        response = "The Dashboard is open, with Total Revenue highlighted."
+        self.assertEqual(await text_filter.filter(response), response)

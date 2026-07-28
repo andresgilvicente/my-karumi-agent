@@ -17,6 +17,7 @@ Updated: 2026-07-28
 - UI bridge: catalog-derived route and capability publication through `ui_state`; idempotent `navigate_to`, `highlight`, and `scroll_to` handlers; and `ui_action_result` acknowledgements correlated by `commandId`.
 - Backend orchestration: dynamic React state in the LLM instruction, catalog-derived tool schemas, five-second action timeouts, confirmation-aware responses, and deterministic dispatch for explicit allowlisted requests.
 - Context safety: deterministic turns commit the user request and confirmed assistant response before audio synthesis, so an interruption does not erase the confirmed action from later LLM context.
+- Kokoro applies Pipecat's sentence-level Markdown filter before synthesis so emphasis markers are not pronounced without changing Qwen's response generation.
 - Navigation compounds the expected focus action: Dashboard highlights Total Revenue, Analytics highlights Traffic Overview, and Team scrolls to the member list.
 
 ## Current Constraints
@@ -38,6 +39,7 @@ Updated: 2026-07-28
 - On 2026-07-28, manual browser tests passed for Team navigation plus member-list scroll, Dashboard navigation plus Total Revenue highlight, and Analytics navigation plus Traffic Overview highlight.
 - Backend logs confirmed a matching `status: ok` result for every navigation and focus `commandId` before the agent reported success.
 - On 2026-07-28, the catalog refactor passed ten standard-library UI-control tests, Python compilation/import, and a Linux Node 24 production build. Manual regression checks passed normal conversation, all three navigation/focus flows, a split navigation request, and sidebar navigation before a voice command.
+- On 2026-07-28, Pipecat's sentence-level Markdown filter passed focused automated cases for bold, italic, underscore, inline-code, and plain text; a manual greeting check confirmed that section names are spoken naturally without formatting symbols.
 
 ## Relevant Files
 

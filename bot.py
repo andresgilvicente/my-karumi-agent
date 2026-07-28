@@ -37,6 +37,7 @@ from pipecat.transports.base_transport import BaseTransport, TransportParams
 from pipecat.turns.user_start import VADUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
+from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter
 from pipecat.workers.runner import WorkerRunner
 
 from ui_control.catalog import load_catalog
@@ -207,6 +208,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     )
 
     tts = KokoroTTSService(
+        text_filters=[MarkdownTextFilter()],
         settings=KokoroTTSService.Settings(
             voice=TTS_VOICE,
             language=TTS_LANGUAGE,

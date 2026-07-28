@@ -20,7 +20,7 @@
 
 ## Runtime Configuration
 
-- The pipeline order is `transport.input()` -> Whisper STT -> UI intent/tool-choice processor -> user context aggregator -> Ollama LLM -> Kokoro TTS -> `transport.output()` -> assistant context aggregator. `UserBotLatencyObserver` and `VoiceMetricsObserver` observe the worker without being pipeline processors.
+- The pipeline order is `transport.input()` -> Whisper STT -> UI intent/tool-choice processor -> user context aggregator -> Ollama LLM -> Kokoro TTS -> `transport.output()` -> assistant context aggregator. Kokoro uses Pipecat's `MarkdownTextFilter` after sentence aggregation so formatting markers are not pronounced. `UserBotLatencyObserver` and `VoiceMetricsObserver` observe the worker without being pipeline processors.
 - Current settings are Whisper `base` on CPU with `int8`, Ollama `qwen2.5:1.5b`, Kokoro voice `af_heart`, English for STT, TTS, and responses, and a 1.0-second speech timeout for ending a user turn. Change these through the constants and `SYSTEM_INSTRUCTION` near the top of `bot.py`.
 - The default architecture is fully local and requires no `.env` or API keys. A model-backed run still needs the local runtime prerequisites documented in `README.md`, including Ollama, the configured model, and `espeak-ng`.
 - React publishes `ui_state` with `uiContractVersion`, supported commands/views/targets, and a monotonic revision. The backend owns authorization through the shared catalog, ignores stale revisions, allows extra frontend capabilities, and requires every action's capabilities before dispatch.
