@@ -1,3 +1,4 @@
+import asyncio
 import time
 from collections.abc import Awaitable, Callable
 
@@ -10,6 +11,7 @@ from pipecat.services.llm_service import FunctionCallParams
 
 from ui_control.catalog import UIControlCatalog
 from ui_control.intents import fallback_tool_name, resolve_ui_intent
+from ui_control.turns import ConsumedUserTurnFrame
 
 
 def record_deterministic_turn(context: LLMContext, user_text: str, response: str) -> TTSSpeakFrame:
@@ -31,8 +33,13 @@ class UIActionExecutor:
         self._catalog = catalog
         self._send_command = send_command
         self._get_ui_state = get_ui_state
+        self._action_lock = asyncio.Lock()
 
     async def execute(self, command: str, payload: dict) -> dict:
+        async with self._action_lock:
+            return await self._execute(command, payload)
+
+    async def _execute(self, command: str, payload: dict) -> dict:
         if command == "navigate_to":
             return await self._navigate(payload.get("view"))
         if command in {"highlight", "scroll_to"}:
@@ -93,6 +100,7 @@ class UIActionExecutor:
         self,
         context: LLMContext,
         on_resolution: Callable[[str, dict], None] | None = None,
+        on_action_result: Callable[[str, dict, dict], Awaitable[None]] | None = None,
     ) -> dict[str, FunctionSchema]:
         async def finish_tool_call(params: FunctionCallParams, result: dict) -> None:
             context.set_tools([])
@@ -103,27 +111,39 @@ class UIActionExecutor:
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: function_call")
             if on_resolution:
                 on_resolution("function_call", {"command": "navigate_to"})
+            payload = {"view": params.arguments.get("view")}
+            result = await self.execute("navigate_to", payload)
+            if on_action_result:
+                await on_action_result("navigate_to", payload, result)
             await finish_tool_call(
                 params,
-                await self.execute("navigate_to", {"view": params.arguments.get("view")}),
+                result,
             )
 
         async def handle_highlight(params: FunctionCallParams) -> None:
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: function_call")
             if on_resolution:
                 on_resolution("function_call", {"command": "highlight"})
+            payload = {"target": params.arguments.get("target")}
+            result = await self.execute("highlight", payload)
+            if on_action_result:
+                await on_action_result("highlight", payload, result)
             await finish_tool_call(
                 params,
-                await self.execute("highlight", {"target": params.arguments.get("target")}),
+                result,
             )
 
         async def handle_scroll(params: FunctionCallParams) -> None:
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: function_call")
             if on_resolution:
                 on_resolution("function_call", {"command": "scroll_to"})
+            payload = {"target": params.arguments.get("target")}
+            result = await self.execute("scroll_to", payload)
+            if on_action_result:
+                await on_action_result("scroll_to", payload, result)
             await finish_tool_call(
                 params,
-                await self.execute("scroll_to", {"target": params.arguments.get("target")}),
+                result,
             )
 
         return {
@@ -178,6 +198,8 @@ class UIActionToolChoiceProcessor(FrameProcessor):
         execute_action: Callable[[str, dict], Awaitable[dict]],
         response_for: Callable[[str, dict, dict], str],
         on_resolution: Callable[[str, dict], None] | None = None,
+        on_action_result: Callable[[str, dict, dict], Awaitable[None]] | None = None,
+        get_turn_generation: Callable[[], int] | None = None,
     ):
         super().__init__()
         self._context = context
@@ -186,6 +208,8 @@ class UIActionToolChoiceProcessor(FrameProcessor):
         self._execute_action = execute_action
         self._response_for = response_for
         self._on_resolution = on_resolution
+        self._on_action_result = on_action_result
+        self._get_turn_generation = get_turn_generation or (lambda: 0)
         self._previous_transcript = ""
         self._previous_transcript_at = 0.0
 
@@ -212,7 +236,13 @@ class UIActionToolChoiceProcessor(FrameProcessor):
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Deterministic intent: {} {}", command, payload)
             if self._on_resolution:
                 self._on_resolution("deterministic", {"command": command, **payload})
+            await self.push_frame(
+                ConsumedUserTurnFrame(generation=self._get_turn_generation()),
+                direction,
+            )
             result = await self._execute_action(command, payload)
+            if self._on_action_result:
+                await self._on_action_result(command, payload, result)
             response = self._response_for(command, payload, result)
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> Deterministic result: {}", result)
             self._previous_transcript = ""

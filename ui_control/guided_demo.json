@@ -1,0 +1,74 @@
+{
+  "offerDelaySecs": 5,
+  "userInterventionWindowSecs": 4,
+  "transcriptGraceSecs": 5,
+  "introduction": "Hi, I'm Karumi Agent. I can give you a quick interactive tour of Metric Master Suite. You can interrupt or ask questions at any time.",
+  "autoStartMessage": "I'll start with the main Dashboard.",
+  "pauseMessage": "The demo is paused. Say resume when you're ready.",
+  "stopMessage": "I've stopped the demo. You can still ask me anything about the product.",
+  "failureMessage": "I couldn't update the interface, so I've stopped the tour. Say restart the demo to try again.",
+  "completionMessage": "That completes the quick tour. What would you like to explore in more detail?",
+  "intents": {
+    "start_demo": [
+      "start the demo",
+      "give me a tour",
+      "show me the product",
+      "begin the walkthrough"
+    ],
+    "continue_demo": [
+      "continue",
+      "go on",
+      "next",
+      "show me the next section"
+    ],
+    "pause_demo": [
+      "pause the demo",
+      "stop for a moment",
+      "hold on"
+    ],
+    "resume_demo": [
+      "resume the demo",
+      "continue the tour"
+    ],
+    "stop_demo": [
+      "stop the demo",
+      "end the tour",
+      "cancel the demo",
+      "no thanks",
+      "not now"
+    ],
+    "restart_demo": [
+      "restart the demo",
+      "start the tour again"
+    ]
+  },
+  "steps": [
+    {
+      "id": "dashboard",
+      "action": {
+        "command": "navigate_to",
+        "payload": { "view": "dashboard" }
+      },
+      "transitionMessage": "Let's begin with the Dashboard.",
+      "explanation": "The Dashboard gives you a quick view of business performance, with Total Revenue highlighted."
+    },
+    {
+      "id": "analytics",
+      "action": {
+        "command": "navigate_to",
+        "payload": { "view": "analytics" }
+      },
+      "transitionMessage": "Next, let's look at Analytics.",
+      "explanation": "Traffic Overview helps you understand where users come from and how activity changes over time."
+    },
+    {
+      "id": "team",
+      "action": {
+        "command": "navigate_to",
+        "payload": { "view": "team" }
+      },
+      "transitionMessage": "Finally, let's look at the Team section.",
+      "explanation": "This view provides a clear overview of members and their roles, with the member list in focus."
+    }
+  ]
+}

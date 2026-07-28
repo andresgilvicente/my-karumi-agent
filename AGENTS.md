@@ -11,7 +11,9 @@
 
 - `bot.py`: runtime configuration, system instruction, turn handling, metrics observers, Pipecat pipeline, connection handlers, and runner entrypoint.
 - `client/src/ui-demo-catalog.json`: shared, versioned contract for the allowlisted semantic UI surface.
-- `ui_control/catalog.py`, `ui_control/intents.py`, and `ui_control/processor.py`: catalog loading/validation, deterministic intent resolution, command execution, function schemas, and context-safe deterministic responses.
+- `ui_control/catalog.py`, `ui_control/intents.py`, and `ui_control/processor.py`: catalog loading/validation, deterministic intent resolution, serialized command execution, function schemas, and context-safe deterministic responses.
+- `ui_control/guided_demo.json`, `ui_control/guided_demo.py`, and `ui_control/guided_demo_processor.py`: declarative tour content, deterministic demo controls, interruptible session state, timers, and Pipecat turn/playback integration.
+- `ui_control/turns.py`: generation-correlated, uninterruptible turn finalization for deterministic transcripts consumed before the LLM aggregator.
 - `client/src/App.jsx`: all frontend views, state, interactions, and route definitions.
 - `client/src/UICommandBridge.jsx`: RTVI UI state publication, semantic command handlers, idempotent command results, highlights, and scrolling.
 - `client/src/VoiceControls.jsx` and `client/src/voiceClient.js`: WebRTC connection, microphone controls, voice activity status, and the configurable runner endpoint.
@@ -20,7 +22,7 @@
 
 ## Runtime Configuration
 
-- The pipeline order is `transport.input()` -> Whisper STT -> UI intent/tool-choice processor -> user context aggregator -> Ollama LLM -> Kokoro TTS -> `transport.output()` -> assistant context aggregator. Kokoro uses Pipecat's `MarkdownTextFilter` after sentence aggregation so formatting markers are not pronounced. `UserBotLatencyObserver` and `VoiceMetricsObserver` observe the worker without being pipeline processors.
+- The pipeline order is `transport.input()` -> Whisper STT -> guided-demo control processor -> UI intent/tool-choice processor -> user context aggregator -> Ollama LLM -> Kokoro TTS -> `transport.output()` -> assistant context aggregator. Kokoro uses Pipecat's `MarkdownTextFilter` after sentence aggregation so formatting markers are not pronounced. Latency, metrics, and guided-demo playback observers observe the worker without being pipeline processors.
 - Current settings are Whisper `base` on CPU with `int8`, Ollama `qwen2.5:1.5b`, Kokoro voice `af_heart`, English for STT, TTS, and responses, and a 1.0-second speech timeout for ending a user turn. Change these through the constants and `SYSTEM_INSTRUCTION` near the top of `bot.py`.
 - The default architecture is fully local and requires no `.env` or API keys. A model-backed run still needs the local runtime prerequisites documented in `README.md`, including Ollama, the configured model, and `espeak-ng`.
 - Local profiling is opt-in with `KARUMI_PROFILE=1`; it reuses Pipecat metrics and writes correlated JSONL events under ignored `profiles/` without changing normal logs. Use the fixed corpus and protocol in `docs/profiling-corpus.md`, and never commit machine-specific profile output.
@@ -28,6 +30,8 @@
 - Backend commands use `RTVIUICommandFrame` with a unique `commandId`, wait up to five seconds for `ui_action_result`, and only treat a matching `status: ok`, command, view, and target as confirmation. Keep this acknowledgement requirement for every new UI action.
 - UI execution is allowlisted: navigation to Dashboard/Analytics/Team, highlights for Total Revenue/Traffic Overview, and scrolling to the Team member list. Navigation also performs the standard focus action for its destination. Goals, search, analytics tabs, coordinates, and generic screen control remain unsupported.
 - Explicit supported requests are dispatched deterministically before Ollama because `qwen2.5:1.5b` can ignore required tool calls. Function tools remain a limited fallback, and Ollama continues to handle normal conversation. Logs identify `deterministic`, `function_call`, and `conversation` resolution paths.
+- The backend owns an autonomous three-step guided demo: Dashboard -> Analytics -> Team. It offers the tour after the compatible React state arrives, starts after five seconds of silence with a spoken warning, and advances four seconds after each completed explanation. All timing and copy are declarative in `ui_control/guided_demo.json`.
+- Guided-demo controls (`start`, `continue`, `pause`, `resume`, `stop`, and `restart`) are resolved deterministically. User speech cancels pending advancement, normal questions still reach Ollama, and advancement resumes only after playback ends. Actions remain serialized and confirmation-gated.
 
 ## Development And Validation
 
@@ -39,7 +43,7 @@
 - Profiling tests use temporary output paths. A runtime profile can be smoke-tested with `KARUMI_PROFILE=1 KARUMI_PROFILE_PATH=/tmp/karumi-profile.jsonl uv run bot.py -t webrtc`; profile files include local transcriptions only when explicitly enabled.
 - For backend-only edits, first run the import-independent syntax check `uv run python -m py_compile bot.py`. Run the full model-backed voice flow only when the change warrants its heavier local prerequisites.
 - For frontend edits, run `npm run build` under Linux Node inside `client/`, then manually exercise affected routes and interactions using the `Validate Frontend` checklist in `README.md`.
-- Voice and UI end-to-end verification is manual in Chrome through the React app. Click `Connect voice`, verify normal conversation, then exercise Dashboard, Analytics, and Team commands. A successful action should produce `[STT]`, `[UI] Deterministic intent`, command confirmation, deterministic result, and `[LATENCY]` logs. Pipecat's test client remains useful for voice-only isolation.
+- Voice and UI end-to-end verification is manual in Chrome through the React app. Click `Connect voice`, verify the proactive offer, the silent Dashboard -> Analytics -> Team flow, interruption with a question, pause/resume, stop/restart, and direct navigation during a tour. Every successful action must log its matching UI confirmations before the explanation. Pipecat's test client remains useful for voice-only isolation but cannot acknowledge UI actions.
 
 ## Working Rules
 

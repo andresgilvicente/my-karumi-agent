@@ -10,10 +10,10 @@ from uuid import uuid4
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
+    BotStartedSpeakingFrame,
     BotStoppedSpeakingFrame,
     LLMFullResponseEndFrame,
     LLMFullResponseStartFrame,
-    LLMRunFrame,
     LLMTextFrame,
     LLMUpdateSettingsFrame,
     MetricsFrame,
@@ -49,8 +49,11 @@ from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter
 from pipecat.workers.runner import WorkerRunner
 
 from ui_control.catalog import load_catalog
+from ui_control.guided_demo import GuidedDemoController, load_guided_demo
+from ui_control.guided_demo_processor import GuidedDemoProcessor
 from ui_control.processor import UIActionExecutor, UIActionToolChoiceProcessor
 from ui_control.profiling import LocalVoiceProfile, create_local_profile
+from ui_control.turns import ConsumedUserTurnStopStrategy
 
 # ---------------------------------------------------------------------------
 # Config — change these to swap models / voices without touching the pipeline.
@@ -66,6 +69,7 @@ TTS_LANGUAGE = Language.EN
 USER_SPEECH_TIMEOUT_SECS = 1 # 0.6
 UI_ACTION_TIMEOUT_SECS = 5.0
 UI_CATALOG = load_catalog()
+GUIDED_DEMO = load_guided_demo(UI_CATALOG)
 
 
 def debug_logs_enabled(runner_args: RunnerArguments) -> bool:
@@ -127,8 +131,8 @@ separately only when the user asks to focus an element on the view that is alrea
 Do not use interface tools for Goals, search, analytics tabs, or any other action. Always respond in
 English.
 
-At the beginning of a session, introduce yourself as Karumi Agent, offer a brief interactive tour
-of Metric Master Suite, and invite the user to interrupt or ask questions."""
+The guided-demo controller owns the tour sequence and its navigation. During a tour, answer the
+user's questions naturally without claiming that you advanced, paused, or completed the tour."""
 
 # ---------------------------------------------------------------------------
 # Transport
@@ -261,6 +265,29 @@ class VoiceMetricsObserver(BaseObserver):
                 logger.debug(f"[LATENCY] TTS TTFA: {metric.ttfa:.3f}s")
                 if self._profile:
                     self._profile.service_metric("tts", "ttfa", metric.ttfa * 1000)
+
+
+class GuidedDemoPlaybackObserver(BaseObserver):
+    """Forward actual output playback boundaries to the guided-demo controller."""
+
+    def __init__(self, controller: GuidedDemoController):
+        super().__init__()
+        self._controller = controller
+        self._processed_frames: set[int] = set()
+        self._frame_history: deque[int] = deque(maxlen=100)
+
+    async def on_push_frame(self, data: FramePushed):
+        if data.direction != FrameDirection.DOWNSTREAM or data.frame.id in self._processed_frames:
+            return
+        self._processed_frames.add(data.frame.id)
+        self._frame_history.append(data.frame.id)
+        if len(self._processed_frames) > len(self._frame_history):
+            self._processed_frames = set(self._frame_history)
+
+        if isinstance(data.frame, BotStartedSpeakingFrame):
+            await self._controller.on_bot_started_speaking()
+        elif isinstance(data.frame, BotStoppedSpeakingFrame):
+            await self._controller.on_bot_stopped_speaking()
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +429,32 @@ async def run_bot(
         if profile:
             profile.resolution(resolution, details)
 
-    ui_tools = ui_actions.build_tools(context, record_resolution)
+    async def emit_demo_speech(text: str, user_text: str | None) -> None:
+        if worker is None:
+            return
+        context.set_tools([])
+        context.set_tool_choice("auto")
+        await worker.queue_frame(TTSSpeakFrame(text))
+
+    def record_demo_control(text: str) -> None:
+        context.add_message({"role": "user", "content": text.strip()})
+
+    demo_controller = GuidedDemoController(
+        GUIDED_DEMO,
+        ui_actions.execute,
+        emit_demo_speech,
+    )
+
+    async def on_external_action(command: str, payload: dict, result: dict) -> None:
+        await demo_controller.on_external_action(command, payload, result)
+
+    guided_demo_gate = GuidedDemoProcessor(
+        demo_controller,
+        GUIDED_DEMO,
+        record_resolution,
+        record_demo_control,
+    )
+    ui_tools = ui_actions.build_tools(context, record_resolution, on_external_action)
     ui_intent_gate = UIActionToolChoiceProcessor(
         context,
         UI_CATALOG,
@@ -410,6 +462,8 @@ async def run_bot(
         ui_actions.execute,
         ui_actions.response_for,
         record_resolution,
+        on_external_action,
+        lambda: guided_demo_gate.user_turn_generation,
     )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
@@ -418,6 +472,7 @@ async def run_bot(
             user_turn_strategies=UserTurnStrategies(
                 start=[VADUserTurnStartStrategy()],
                 stop=[
+                    ConsumedUserTurnStopStrategy(),
                     SpeechTimeoutUserTurnStopStrategy(
                         user_speech_timeout=USER_SPEECH_TIMEOUT_SECS
                     )
@@ -433,6 +488,7 @@ async def run_bot(
         tts_name=tts.name,
         profile=profile,
     )
+    demo_observer = GuidedDemoPlaybackObserver(demo_controller)
 
     @latency_observer.event_handler("on_first_bot_speech_latency")
     async def on_first_bot_speech_latency(observer, latency):
@@ -456,6 +512,7 @@ async def run_bot(
         [
             transport.input(),
             stt,
+            guided_demo_gate,
             ui_intent_gate,
             user_aggregator,
             llm,
@@ -472,7 +529,7 @@ async def run_bot(
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
-        observers=[latency_observer, metrics_observer],
+        observers=[latency_observer, metrics_observer, demo_observer],
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
     )
 
@@ -529,6 +586,7 @@ async def run_bot(
                 )
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> State updated: {}", current_ui_state)
             await update_ui_instruction()
+            await demo_controller.set_ui_ready(current_ui_state["contractCompatible"])
         elif message.data.event == "ui_action_result":
             command_id = payload.get("commandId")
             pending_action = pending_ui_actions.get(command_id)
@@ -564,11 +622,12 @@ async def run_bot(
         logger.opt(colors=True).info("<magenta>[SESSION]</magenta> Connected")
         if profile:
             profile.start_session()
-        await worker.queue_frames([LLMRunFrame()])
+        await demo_controller.connect(profile.session_id if profile else uuid4().hex)
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
         logger.opt(colors=True).info("<magenta>[SESSION]</magenta> Disconnected")
+        await demo_controller.disconnect()
         if profile:
             profile.end_session("disconnected")
         await worker.cancel()

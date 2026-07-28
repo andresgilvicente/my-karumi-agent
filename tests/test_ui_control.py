@@ -1,11 +1,19 @@
+import asyncio
 import unittest
 
 from pipecat.processors.aggregators.llm_context import LLMContext
+from pipecat.frames.frames import TTSSpeakFrame, TranscriptionFrame
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter
 
 from ui_control.catalog import load_catalog
 from ui_control.intents import resolve_ui_intent
-from ui_control.processor import UIActionExecutor, record_deterministic_turn
+from ui_control.processor import (
+    UIActionExecutor,
+    UIActionToolChoiceProcessor,
+    record_deterministic_turn,
+)
+from ui_control.turns import ConsumedUserTurnFrame
 
 
 class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
@@ -123,6 +131,75 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
             await executor.execute("highlight", {"target": "team-member-list"}),
             {"status": "error", "code": "unsupported_target"},
         )
+
+    async def test_semantic_actions_are_serialized(self):
+        calls = []
+        first_command_started = asyncio.Event()
+        release_first_command = asyncio.Event()
+
+        async def send_command(command, payload):
+            calls.append((command, payload))
+            if len(calls) == 1:
+                first_command_started.set()
+                await release_first_command.wait()
+            if command == "navigate_to":
+                return {"status": "confirmed", "currentPage": payload["view"]}
+            return {"status": "confirmed", "target": payload["target"]}
+
+        executor = UIActionExecutor(self.catalog, send_command, lambda: self.compatible_state())
+        dashboard = asyncio.create_task(
+            executor.execute("navigate_to", {"view": "dashboard"})
+        )
+        await first_command_started.wait()
+        analytics = asyncio.create_task(
+            executor.execute("navigate_to", {"view": "analytics"})
+        )
+        await asyncio.sleep(0)
+        self.assertEqual(calls, [("navigate_to", {"view": "dashboard"})])
+
+        release_first_command.set()
+        await asyncio.gather(dashboard, analytics)
+        self.assertEqual(
+            calls,
+            [
+                ("navigate_to", {"view": "dashboard"}),
+                ("highlight", {"target": "total-revenue-card"}),
+                ("navigate_to", {"view": "analytics"}),
+                ("highlight", {"target": "traffic-overview"}),
+            ],
+        )
+
+    async def test_deterministic_ui_intent_closes_the_consumed_user_turn(self):
+        context = LLMContext()
+        pushed = []
+
+        async def execute(command, payload):
+            return {"status": "confirmed", "action": command, **payload}
+
+        processor = UIActionToolChoiceProcessor(
+            context,
+            self.catalog,
+            {},
+            execute,
+            lambda command, payload, result: "Confirmed.",
+        )
+
+        async def capture(frame, direction=FrameDirection.DOWNSTREAM):
+            pushed.append((frame, direction))
+
+        processor.push_frame = capture
+        await processor.process_frame(
+            TranscriptionFrame(
+                text="Take me to Dashboard.",
+                user_id="user",
+                timestamp="2026-07-28T00:00:00Z",
+            ),
+            FrameDirection.DOWNSTREAM,
+        )
+
+        self.assertIsInstance(pushed[0][0], ConsumedUserTurnFrame)
+        self.assertEqual(pushed[0][0].generation, 0)
+        self.assertIsInstance(pushed[1][0], TTSSpeakFrame)
 
     def test_confirmation_requires_the_expected_command_and_target(self):
         self.assertTrue(
