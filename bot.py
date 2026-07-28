@@ -1,5 +1,8 @@
 import asyncio
+import argparse
 import json
+import os
+import sys
 import time
 from collections import deque
 from uuid import uuid4
@@ -8,9 +11,13 @@ from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
 from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
+    LLMFullResponseEndFrame,
+    LLMFullResponseStartFrame,
     LLMRunFrame,
+    LLMTextFrame,
     LLMUpdateSettingsFrame,
     MetricsFrame,
+    TTSSpeakFrame,
     TranscriptionFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
@@ -58,13 +65,47 @@ USER_SPEECH_TIMEOUT_SECS = 1 # 0.6
 UI_ACTION_TIMEOUT_SECS = 5.0
 UI_CATALOG = load_catalog()
 
+
+def debug_logs_enabled(runner_args: RunnerArguments) -> bool:
+    """Enable detailed application logs with a flag or environment variable."""
+    return bool(getattr(runner_args.cli_args, "debug_logs", False)) or os.getenv(
+        "KARUMI_DEBUG_LOGS", ""
+    ).lower() == "true"
+
+
+def configure_logging(debug_enabled: bool) -> None:
+    """Keep normal output focused on the application conversation and actions."""
+    app_loggers = ("__main__", "bot", "ui_control")
+
+    def is_relevant(record) -> bool:
+        return record["level"].name in {"WARNING", "ERROR", "CRITICAL"} or record[
+            "name"
+        ].startswith(app_loggers)
+
+    logger.remove()
+    logger.add(
+        sys.stderr,
+        level="DEBUG" if debug_enabled else "INFO",
+        filter=is_relevant,
+        format="{time:HH:mm:ss} | {level:<7} | {message}",
+    )
+
+
+def log_agent_response(text: str) -> None:
+    """Keep the transcript readable even if the model emits Markdown markers."""
+    logger.opt(colors=True).info(
+        "<green>[AGENT]</green> {}", text.translate(str.maketrans("", "", "*_`"))
+    )
+
+
 # ---------------------------------------------------------------------------
 # Agent personality
 # ---------------------------------------------------------------------------
 SYSTEM_INSTRUCTION = """You are Karumi Agent, an AI Product Demo Specialist for Metric Master Suite.
 
 You are speaking with a user in a live voice conversation. Keep responses concise, natural, and
-easy to follow when spoken aloud. Use plain sentences, not markdown, lists, or emojis.
+easy to follow when spoken aloud. Use plain sentences only. Do not use Markdown syntax, numbered
+lists, bullet points, headings, or emojis.
 Keep responses under 2-3 sentences unless the user asks for detail.
 
 Take initiative instead of behaving like a passive support chatbot. Introduce the product, answer
@@ -103,7 +144,7 @@ TRANSPORT_PARAMS = {
 # transcription, TTFA, and total processing measurements from native metrics.
 # ---------------------------------------------------------------------------
 class VoiceMetricsObserver(BaseObserver):
-    """Log per-turn transcription and native service timing metrics."""
+    """Log complete conversation turns and optional native service timing metrics."""
 
     def __init__(self, *, stt_name: str, llm_name: str, tts_name: str):
         super().__init__()
@@ -113,6 +154,7 @@ class VoiceMetricsObserver(BaseObserver):
         self._speech_end_time: float | None = None
         self._tts_processing_total = 0.0
         self._tts_ttfa_logged = False
+        self._llm_response: list[str] = []
         self._processed_frames: set[int] = set()
         self._frame_history: deque[int] = deque(maxlen=200)
 
@@ -133,17 +175,30 @@ class VoiceMetricsObserver(BaseObserver):
             self._speech_end_time = None
             self._tts_processing_total = 0.0
             self._tts_ttfa_logged = False
+            logger.debug("[TURN] User started speaking")
         elif isinstance(frame, VADUserStoppedSpeakingFrame):
             self._speech_end_time = frame.timestamp - frame.stop_secs
+            logger.debug("[TURN] User stopped speaking")
         elif isinstance(frame, TranscriptionFrame):
-            logger.info(f"[STT] Transcription: {frame.text.strip()!r}")
+            logger.opt(colors=True).info("<cyan>[USER]</cyan> {}", frame.text.strip())
             if self._speech_end_time is not None:
                 latency = time.time() - self._speech_end_time
-                logger.info(f"[LATENCY] End of user speech -> transcription: {latency:.3f}s")
+                logger.debug(f"[LATENCY] End of user speech -> transcription: {latency:.3f}s")
+        elif isinstance(frame, LLMFullResponseStartFrame):
+            self._llm_response = []
+        elif isinstance(frame, LLMTextFrame):
+            self._llm_response.append(frame.text)
+        elif isinstance(frame, LLMFullResponseEndFrame):
+            response = "".join(self._llm_response).strip()
+            if response:
+                log_agent_response(response)
+            self._llm_response = []
+        elif isinstance(frame, TTSSpeakFrame):
+            log_agent_response(frame.text.strip())
         elif isinstance(frame, MetricsFrame):
             self._handle_metrics(frame)
         elif isinstance(frame, BotStoppedSpeakingFrame) and self._tts_processing_total > 0:
-            logger.info(
+            logger.debug(
                 f"[LATENCY] TTS generation total across segments: "
                 f"{self._tts_processing_total:.3f}s"
             )
@@ -153,19 +208,19 @@ class VoiceMetricsObserver(BaseObserver):
         for metric in frame.data:
             if isinstance(metric, ProcessingMetricsData):
                 if metric.processor == self._stt_name:
-                    logger.info(f"[LATENCY] STT processing: {metric.value:.3f}s")
+                    logger.debug(f"[LATENCY] STT processing: {metric.value:.3f}s")
                 elif metric.processor == self._llm_name:
-                    logger.info(f"[LATENCY] LLM total: {metric.value:.3f}s")
+                    logger.debug(f"[LATENCY] LLM total: {metric.value:.3f}s")
                 elif metric.processor == self._tts_name:
                     self._tts_processing_total += metric.value
-                    logger.info(f"[LATENCY] TTS segment total: {metric.value:.3f}s")
+                    logger.debug(f"[LATENCY] TTS segment total: {metric.value:.3f}s")
             elif (
                 isinstance(metric, TTFAMetricsData)
                 and metric.processor == self._tts_name
                 and not self._tts_ttfa_logged
             ):
                 self._tts_ttfa_logged = True
-                logger.info(f"[LATENCY] TTS TTFA: {metric.ttfa:.3f}s")
+                logger.debug(f"[LATENCY] TTS TTFA: {metric.ttfa:.3f}s")
 
 
 # ---------------------------------------------------------------------------
@@ -223,7 +278,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         command_id = uuid4().hex
         confirmation = asyncio.get_running_loop().create_future()
         pending_ui_actions[command_id] = (confirmation, command, payload)
-        logger.info(f"[UI] Sending {command} command {command_id}: {payload}")
+        logger.opt(colors=True).info("<yellow>[UI]</yellow> Sending {}: {}", command, payload)
 
         try:
             await worker.queue_frame(
@@ -234,21 +289,23 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             )
             result = await asyncio.wait_for(confirmation, timeout=UI_ACTION_TIMEOUT_SECS)
         except TimeoutError:
-            logger.warning(f"[UI] Command {command_id} timed out")
+            logger.opt(colors=True).warning("<yellow>[UI]</yellow> Command {} timed out", command_id)
             return {"status": "timeout", "action": command}
         except Exception as error:
-            logger.warning(f"[UI] Command {command_id} failed: {error}")
+            logger.opt(colors=True).warning("<yellow>[UI]</yellow> Command {} failed: {}", command_id, error)
             return {"status": "error", "action": command, "code": "command_failed"}
         finally:
             pending_ui_actions.pop(command_id, None)
 
         if result.get("status") != "ok":
+            logger.opt(colors=True).warning("<yellow>[UI]</yellow> {} failed: {}", command, result)
             return {
                 "status": "error",
                 "action": command,
                 "code": result.get("code", "action_failed"),
             }
 
+        logger.opt(colors=True).info("<yellow>[UI]</yellow> {} confirmed", command)
         return {
             "status": "confirmed",
             "action": command,
@@ -289,17 +346,17 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
     @latency_observer.event_handler("on_first_bot_speech_latency")
     async def on_first_bot_speech_latency(observer, latency):
-        logger.info(f"[LATENCY] Client connected -> first bot audio: {latency:.3f}s")
+        logger.debug(f"[LATENCY] Client connected -> first bot audio: {latency:.3f}s")
 
     @latency_observer.event_handler("on_latency_measured")
     async def on_latency_measured(observer, latency):
-        logger.info(f"[LATENCY] End of user speech -> first bot audio: {latency:.3f}s")
+        logger.debug(f"[LATENCY] End of user speech -> first bot audio: {latency:.3f}s")
 
     @latency_observer.event_handler("on_latency_breakdown")
     async def on_latency_breakdown(observer, breakdown):
         events = breakdown.chronological_events()
         if events:
-            logger.info(f"[LATENCY] Breakdown: {' | '.join(events)}")
+            logger.debug(f"[LATENCY] Breakdown: {' | '.join(events)}")
 
     pipeline = Pipeline(
         [
@@ -346,10 +403,10 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             current_page = payload.get("currentPage")
             revision = payload.get("revision")
             if current_page not in {"home", *UI_CATALOG.view_ids} or not isinstance(revision, int):
-                logger.warning(f"[UI] Ignoring invalid UI state: {payload}")
+                logger.opt(colors=True).warning("<yellow>[UI]</yellow> Ignoring invalid state: {}", payload)
                 return
             if current_ui_state is not None and revision <= current_ui_state.get("revision", -1):
-                logger.debug(f"[UI] Ignoring stale UI state revision {revision}")
+                logger.opt(colors=True).debug("<yellow>[UI]</yellow> Ignoring stale state revision {}", revision)
                 return
 
             visible_elements = payload.get("visibleElements", [])
@@ -373,14 +430,18 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             }
             current_ui_state["contractCompatible"] = UI_CATALOG.is_contract_compatible(current_ui_state)
             if not current_ui_state["contractCompatible"]:
-                logger.warning(f"[UI] Contract capabilities are incompatible: {current_ui_state}")
-            logger.info(f"[UI] State updated: {current_ui_state}")
+                logger.opt(colors=True).warning(
+                    "<yellow>[UI]</yellow> Contract capabilities are incompatible: {}", current_ui_state
+                )
+            logger.opt(colors=True).debug("<yellow>[UI]</yellow> State updated: {}", current_ui_state)
             await update_ui_instruction()
         elif message.data.event == "ui_action_result":
             command_id = payload.get("commandId")
             pending_action = pending_ui_actions.get(command_id)
             if pending_action is None or pending_action[0].done():
-                logger.debug(f"[UI] Ignoring late or unknown confirmation: {command_id}")
+                logger.opt(colors=True).debug(
+                    "<yellow>[UI]</yellow> Ignoring late or unknown confirmation: {}", command_id
+                )
                 return
 
             confirmation, command, expected_payload = pending_action
@@ -390,22 +451,28 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
                     "code": "confirmation_mismatch",
                     "commandId": command_id,
                 }
-                logger.warning(f"[UI] Rejected incoherent confirmation for {command_id}")
+                logger.opt(colors=True).warning(
+                    "<yellow>[UI]</yellow> Rejected incoherent confirmation for {}", command_id
+                )
             elif payload.get("status") == "ok":
                 current_ui_state = {
                     **(current_ui_state or {}),
                     "currentPage": payload["currentPage"],
                 }
                 await update_ui_instruction()
-            logger.info(f"[UI] Confirmation received for {command_id}: {payload}")
+            logger.opt(colors=True).debug(
+                "<yellow>[UI]</yellow> Confirmation received for {}: {}", command_id, payload
+            )
             confirmation.set_result(payload)
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
+        logger.opt(colors=True).info("<magenta>[SESSION]</magenta> Connected")
         await worker.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
+        logger.opt(colors=True).info("<magenta>[SESSION]</magenta> Disconnected")
         await worker.cancel()
 
     runner = WorkerRunner(handle_sigint=runner_args.handle_sigint)
@@ -414,6 +481,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
 
 
 async def bot(runner_args: RunnerArguments) -> None:
+    configure_logging(debug_logs_enabled(runner_args))
     transport = await create_transport(runner_args, TRANSPORT_PARAMS)
     await run_bot(transport, runner_args)
 
@@ -421,4 +489,10 @@ async def bot(runner_args: RunnerArguments) -> None:
 if __name__ == "__main__":
     from pipecat.runner.run import main
 
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--debug-logs",
+        action="store_true",
+        help="Show detailed conversation, UI, and latency diagnostics.",
+    )
+    main(parser)

@@ -96,21 +96,21 @@ class UIActionExecutor:
             await params.result_callback(result)
 
         async def handle_navigation(params: FunctionCallParams) -> None:
-            logger.info("[UI] Resolution path: function_call")
+            logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: function_call")
             await finish_tool_call(
                 params,
                 await self.execute("navigate_to", {"view": params.arguments.get("view")}),
             )
 
         async def handle_highlight(params: FunctionCallParams) -> None:
-            logger.info("[UI] Resolution path: function_call")
+            logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: function_call")
             await finish_tool_call(
                 params,
                 await self.execute("highlight", {"target": params.arguments.get("target")}),
             )
 
         async def handle_scroll(params: FunctionCallParams) -> None:
-            logger.info("[UI] Resolution path: function_call")
+            logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: function_call")
             await finish_tool_call(
                 params,
                 await self.execute("scroll_to", {"target": params.arguments.get("target")}),
@@ -196,11 +196,11 @@ class UIActionToolChoiceProcessor(FrameProcessor):
             command, payload = intent
             self._context.set_tools([])
             self._context.set_tool_choice("auto")
-            logger.info("[UI] Resolution path: deterministic")
-            logger.info(f"[UI] Deterministic intent: {command} {payload}")
+            logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: deterministic")
+            logger.opt(colors=True).debug("<yellow>[UI]</yellow> Deterministic intent: {} {}", command, payload)
             result = await self._execute_action(command, payload)
             response = self._response_for(command, payload, result)
-            logger.info(f"[UI] Deterministic result: {result}")
+            logger.opt(colors=True).debug("<yellow>[UI]</yellow> Deterministic result: {}", result)
             self._previous_transcript = ""
             self._previous_transcript_at = 0.0
             await self.push_frame(record_deterministic_turn(self._context, frame.text, response), direction)
@@ -211,7 +211,9 @@ class UIActionToolChoiceProcessor(FrameProcessor):
         self._context.set_tools([selected_tool] if selected_tool else [])
         self._context.set_tool_choice("required" if selected_tool else "auto")
         if selected_tool is None:
-            logger.info("[UI] Resolution path: conversation")
+            logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: conversation")
         else:
-            logger.info(f"[UI] Resolution path: function_call candidate ({selected_tool_name})")
+            logger.opt(colors=True).debug(
+                "<yellow>[UI]</yellow> Resolution path: function_call candidate ({})", selected_tool_name
+            )
         await self.push_frame(frame, direction)
