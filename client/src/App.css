@@ -207,6 +207,97 @@ h4 {
   text-transform: uppercase;
 }
 
+.topbar-actions,
+.voice-controls,
+.voice-status {
+  display: flex;
+  align-items: center;
+}
+
+.topbar-actions {
+  gap: 18px;
+}
+
+.voice-controls {
+  gap: 7px;
+}
+
+.voice-status {
+  gap: 7px;
+  min-width: 82px;
+  color: var(--subtle);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.voice-status > span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #999993;
+}
+
+.voice-status-connected > span,
+.voice-status-listening > span {
+  background: #2c8b60;
+}
+
+.voice-status-thinking > span {
+  background: #b07a24;
+}
+
+.voice-status-speaking > span {
+  background: #376eab;
+  box-shadow: 0 0 0 4px rgb(55 110 171 / 12%);
+}
+
+.voice-status-error > span {
+  background: #a33b31;
+}
+
+.voice-button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--ink);
+  border-radius: 8px;
+  background: var(--ink);
+  color: #fff;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.voice-button-secondary {
+  border-color: var(--line);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.voice-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.voice-highlight {
+  animation: voice-highlight-pulse 2.2s ease-out;
+}
+
+@keyframes voice-highlight-pulse {
+  0%,
+  30% {
+    outline: 3px solid #d69f38;
+    outline-offset: 4px;
+    box-shadow: 0 0 0 10px rgb(214 159 56 / 16%);
+  }
+  100% {
+    outline: 3px solid transparent;
+    outline-offset: 8px;
+    box-shadow: 0 0 0 18px transparent;
+  }
+}
+
 .profile-summary,
 .member {
   display: flex;
@@ -1085,6 +1176,14 @@ td:first-child {
     padding: 0 20px;
   }
 
+  .topbar-actions {
+    gap: 10px;
+  }
+
+  .voice-status {
+    min-width: 0;
+  }
+
   .profile-copy {
     display: none;
   }
@@ -1179,6 +1278,31 @@ td:first-child {
 
   .topbar h1 {
     margin: 0;
+  }
+
+  .topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+
+  .topbar-actions {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .profile-summary {
+    display: none;
+  }
+
+  .voice-controls {
+    width: 100%;
+  }
+
+  .voice-button {
+    flex: 1;
   }
 
   .metric-grid {

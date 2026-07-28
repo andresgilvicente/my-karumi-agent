@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import "./App.css";
+import UICommandBridge from "./UICommandBridge.jsx";
+import VoiceControls from "./VoiceControls.jsx";
 
 const ROUTES = {
   home: { view: "home", title: "Home" },
@@ -128,6 +130,8 @@ function App() {
         Skip to main content
       </a>
 
+      <UICommandBridge routeName={routeName} />
+
       <div className="app-shell">
         <Sidebar activeView={route.view} />
 
@@ -188,14 +192,17 @@ function Topbar({ title }) {
         <h1 id="page-title">{title}</h1>
       </div>
 
-      <div className="profile-summary" aria-label="Current user">
-        <span className="avatar avatar-dark" aria-hidden="true">
-          AM
-        </span>
-        <span className="profile-copy">
-          <strong>Alex Morgan</strong>
-          <small>Product Lead</small>
-        </span>
+      <div className="topbar-actions">
+        <VoiceControls />
+        <div className="profile-summary" aria-label="Current user">
+          <span className="avatar avatar-dark" aria-hidden="true">
+            AM
+          </span>
+          <span className="profile-copy">
+            <strong>Alex Morgan</strong>
+            <small>Product Lead</small>
+          </span>
+        </div>
       </div>
     </header>
   );

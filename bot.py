@@ -1,12 +1,19 @@
+import asyncio
+import json
 import time
 from collections import deque
+from collections.abc import Awaitable, Callable
+from uuid import uuid4
 
 from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
+from pipecat.adapters.schemas.function_schema import FunctionSchema
 from pipecat.frames.frames import (
     BotStoppedSpeakingFrame,
     LLMRunFrame,
+    LLMUpdateSettingsFrame,
     MetricsFrame,
+    TTSSpeakFrame,
     TranscriptionFrame,
     VADUserStartedSpeakingFrame,
     VADUserStoppedSpeakingFrame,
@@ -21,10 +28,12 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.processors.frame_processor import FrameDirection
+from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.processors.frameworks.rtvi import RTVIUICommandFrame
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.kokoro.tts import KokoroTTSService
+from pipecat.services.llm_service import FunctionCallParams
 from pipecat.services.ollama.llm import OLLamaLLMService
 from pipecat.services.whisper.stt import WhisperSTTService
 from pipecat.transcriptions.language import Language
@@ -46,6 +55,7 @@ TTS_VOICE = "af_heart"
 TTS_LANGUAGE = Language.EN
 
 USER_SPEECH_TIMEOUT_SECS = 1 # 0.6
+UI_ACTION_TIMEOUT_SECS = 5.0
 
 # ---------------------------------------------------------------------------
 # Agent personality
@@ -61,12 +71,188 @@ questions, and suggest a useful next topic when appropriate. The product include
 revenue, active users, conversion and growth metrics; company goals; traffic analytics; and team
 information.
 
-The interface-control tools are not connected yet. Do not claim to navigate or change the screen.
-If asked to do so, explain briefly that voice conversation is available and screen control is the
-next capability being connected. Always respond in English.
+You can control the connected Metric Master Suite interface only through the provided tools. For
+this MVP, call tools before giving the final spoken response. A tool action is complete only when
+its result has status "confirmed". Never say or imply that an action succeeded after an error or
+timeout; say briefly that you could not update the interface instead. The navigate_to tool also
+performs and confirms the standard focus action for that view: Revenue on Dashboard, Traffic
+Overview on Analytics, and the member list on Team. After navigate_to returns confirmed, explain
+the focused content without calling a second tool. Never narrate a command or speak instructions
+such as "Navigate to the Analytics view" instead of calling the tool. Use highlight or scroll_to
+separately only when the user asks to focus an element on the view that is already open.
+Do not use interface tools for Goals, search, analytics tabs, or any other action. Always respond in
+English.
 
 At the beginning of a session, introduce yourself as Karumi Agent, offer a brief interactive tour
 of Metric Master Suite, and invite the user to interrupt or ask questions."""
+
+UI_VIEWS = {"dashboard", "analytics", "team"}
+UI_HIGHLIGHT_TARGETS = {
+    "total-revenue-card": "dashboard",
+    "traffic-overview": "analytics",
+}
+UI_SCROLL_TARGETS = {"team-member-list": "team"}
+
+NAVIGATION_PHRASES = (
+    "show me",
+    "take me",
+    "bring me",
+    "go to",
+    "open",
+    "navigate",
+    "switch to",
+    "move to",
+    "visit",
+    "look at",
+)
+UI_VIEW_PHRASES = {
+    "dashboard": ("dashboard", "revenue"),
+    "analytics": ("analytics", "traffic"),
+    "team": ("team", "member list", "members"),
+}
+
+
+def _first_phrase_index(text: str, phrases: tuple[str, ...]) -> int | None:
+    indexes = [text.find(phrase) for phrase in phrases if phrase in text]
+    return min(indexes) if indexes else None
+
+
+def _requested_view(text: str) -> tuple[str, int] | None:
+    matches = {
+        view: _first_phrase_index(text, phrases)
+        for view, phrases in UI_VIEW_PHRASES.items()
+    }
+    matches = {view: index for view, index in matches.items() if index is not None}
+    if len(matches) != 1:
+        return None
+    return next(iter(matches.items()))
+
+
+def resolve_ui_intent(text: str, previous_text: str = "") -> tuple[str, dict] | None:
+    """Resolve only the small set of semantic UI actions supported by this MVP."""
+    current = text.casefold().strip()
+    previous = previous_text.casefold().strip()
+    requested_view = _requested_view(current)
+
+    if "scroll" in current and any(
+        phrase in current for phrase in ("team", "member", "list")
+    ):
+        return "scroll_to", {"target": "team-member-list"}
+
+    focus_index = _first_phrase_index(current, ("highlight", "focus", "emphasize"))
+    if focus_index is not None and requested_view is not None:
+        view, target_index = requested_view
+        if focus_index < target_index and view == "dashboard":
+            return "highlight", {"target": "total-revenue-card"}
+        if focus_index < target_index and view == "analytics":
+            return "highlight", {"target": "traffic-overview"}
+
+    if requested_view is None:
+        return None
+
+    view, target_index = requested_view
+    navigation_index = _first_phrase_index(current, NAVIGATION_PHRASES)
+    continued_navigation = (
+        _first_phrase_index(previous, NAVIGATION_PHRASES) is not None
+        and current.startswith(("to ", "into "))
+    )
+    if (
+        navigation_index is not None and navigation_index < target_index
+    ) or continued_navigation:
+        return "navigate_to", {"view": view}
+
+    return None
+
+
+def ui_action_response(command: str, payload: dict, result: dict) -> str:
+    if result.get("status") != "confirmed":
+        return "I couldn't update the interface. Please try again."
+
+    if command == "navigate_to":
+        return {
+            "dashboard": "The Dashboard is open, with Total Revenue highlighted.",
+            "analytics": "Analytics is open, with Traffic Overview highlighted.",
+            "team": "The Team view is open, and I've scrolled to the member list.",
+        }[payload["view"]]
+    if command == "highlight":
+        return {
+            "total-revenue-card": "I've highlighted Total Revenue.",
+            "traffic-overview": "I've highlighted Traffic Overview.",
+        }[payload["target"]]
+    return "I've scrolled to the Team member list."
+
+
+class UIActionToolChoiceProcessor(FrameProcessor):
+    """Dispatch explicit UI intents and leave normal conversation to the LLM."""
+
+    def __init__(
+        self,
+        context: LLMContext,
+        *,
+        navigate_tool: FunctionSchema,
+        highlight_tool: FunctionSchema,
+        scroll_tool: FunctionSchema,
+        execute_action: Callable[[str, dict], Awaitable[dict]],
+    ):
+        super().__init__()
+        self._context = context
+        self._navigate_tool = navigate_tool
+        self._highlight_tool = highlight_tool
+        self._scroll_tool = scroll_tool
+        self._execute_action = execute_action
+        self._previous_transcript = ""
+        self._previous_transcript_at = 0.0
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        if isinstance(frame, TranscriptionFrame):
+            text = frame.text.casefold()
+            now = time.monotonic()
+            previous_text = (
+                self._previous_transcript
+                if now - self._previous_transcript_at <= 6.0
+                else ""
+            )
+            intent = resolve_ui_intent(text, previous_text)
+            self._previous_transcript = text
+            self._previous_transcript_at = now
+
+            if intent is not None:
+                command, payload = intent
+                self._context.set_tools([])
+                self._context.set_tool_choice("auto")
+                self._context.add_message({"role": "user", "content": frame.text.strip()})
+                logger.info(f"[UI] Deterministic intent: {command} {payload}")
+                result = await self._execute_action(command, payload)
+                response = ui_action_response(command, payload, result)
+                logger.info(f"[UI] Deterministic result: {result}")
+                self._previous_transcript = ""
+                self._previous_transcript_at = 0.0
+                await self.push_frame(TTSSpeakFrame(response), direction)
+                return
+
+            navigation_action = any(
+                term in text
+                for term in ("show me", "take me", "go to", "open", "navigate")
+            ) and any(
+                target in text
+                for target in ("dashboard", "analytics", "team", "revenue", "traffic", "there")
+            )
+            if "scroll" in text:
+                selected_tool = self._scroll_tool
+            elif any(term in text for term in ("highlight", "focus")):
+                selected_tool = self._highlight_tool
+            elif navigation_action:
+                selected_tool = self._navigate_tool
+            else:
+                selected_tool = None
+
+            self._context.set_tools([selected_tool] if selected_tool else [])
+            tool_choice = "required" if selected_tool else "auto"
+            self._context.set_tool_choice(tool_choice)
+            tool_name = selected_tool.name if selected_tool else "none"
+            logger.info(f"[UI] Tool choice for turn: {tool_choice} ({tool_name})")
+        await self.push_frame(frame, direction)
 
 # ---------------------------------------------------------------------------
 # Transport
@@ -153,6 +339,23 @@ class VoiceMetricsObserver(BaseObserver):
 # Pipeline
 # ---------------------------------------------------------------------------
 async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> None:
+    current_ui_state: dict | None = None
+    pending_ui_actions: dict[str, asyncio.Future] = {}
+    worker: PipelineWorker | None = None
+
+    def instruction_with_ui_state() -> str:
+        if current_ui_state is None:
+            state_instruction = (
+                "No React UI state has been received. Do not call interface tools until the "
+                "frontend publishes its state."
+            )
+        else:
+            state_instruction = (
+                "Current React UI state (replace any older UI assumptions with this value): "
+                f"{json.dumps(current_ui_state, separators=(',', ':'))}"
+            )
+        return f"{SYSTEM_INSTRUCTION}\n\n{state_instruction}"
+
     stt = WhisperSTTService(
         device="cpu",
         compute_type="int8",
@@ -165,7 +368,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     llm = OLLamaLLMService(
         settings=OLLamaLLMService.Settings(
             model=LLM_MODEL,
-            system_instruction=SYSTEM_INSTRUCTION,
+            system_instruction=instruction_with_ui_state(),
             temperature=0.3,
             max_tokens=150,
         ),
@@ -178,7 +381,176 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         ),
     )
 
-    context = LLMContext()
+    async def execute_ui_action(command: str, payload: dict) -> dict:
+        """Send one semantic command and wait for the React confirmation."""
+        if worker is None or current_ui_state is None:
+            return {"status": "error", "code": "ui_state_unavailable"}
+
+        command_id = uuid4().hex
+        confirmation = asyncio.get_running_loop().create_future()
+        pending_ui_actions[command_id] = confirmation
+        logger.info(f"[UI] Sending {command} command {command_id}: {payload}")
+
+        try:
+            await worker.queue_frame(
+                RTVIUICommandFrame(
+                    command=command,
+                    payload={"commandId": command_id, **payload},
+                )
+            )
+            result = await asyncio.wait_for(confirmation, timeout=UI_ACTION_TIMEOUT_SECS)
+        except TimeoutError:
+            logger.warning(f"[UI] Command {command_id} timed out")
+            return {"status": "timeout", "action": command}
+        except Exception as error:
+            logger.warning(f"[UI] Command {command_id} failed: {error}")
+            return {"status": "error", "action": command, "code": "command_failed"}
+        finally:
+            pending_ui_actions.pop(command_id, None)
+
+        if result.get("status") != "ok":
+            return {
+                "status": "error",
+                "action": command,
+                "code": result.get("code", "action_failed"),
+            }
+
+        return {
+            "status": "confirmed",
+            "action": command,
+            **{key: value for key, value in result.items() if key not in {"commandId", "status"}},
+        }
+
+    async def finish_tool_call(params: FunctionCallParams, result: dict) -> None:
+        context.set_tools([])
+        context.set_tool_choice("auto")
+        await params.result_callback(result)
+
+    async def perform_navigation(view: str) -> dict:
+        if view not in UI_VIEWS:
+            return {"status": "error", "code": "unsupported_view"}
+
+        navigation = await execute_ui_action("navigate_to", {"view": view})
+        if navigation.get("status") != "confirmed":
+            return navigation
+
+        if view == "dashboard":
+            focus = await execute_ui_action("highlight", {"target": "total-revenue-card"})
+        elif view == "analytics":
+            focus = await execute_ui_action("highlight", {"target": "traffic-overview"})
+        else:
+            focus = await execute_ui_action("scroll_to", {"target": "team-member-list"})
+
+        if focus.get("status") != "confirmed":
+            return {
+                "status": "error",
+                "code": "focus_action_failed",
+                "navigation": navigation,
+                "focus": focus,
+            }
+
+        return {
+            "status": "confirmed",
+            "action": "navigate_to",
+            "view": view,
+            "navigation": navigation,
+            "focus": focus,
+        }
+
+    async def perform_highlight(target: str) -> dict:
+        expected_page = UI_HIGHLIGHT_TARGETS.get(target)
+        if expected_page is None:
+            return {"status": "error", "code": "unsupported_target"}
+        if current_ui_state is None or current_ui_state.get("currentPage") != expected_page:
+            return {"status": "error", "code": "target_not_visible"}
+        return await execute_ui_action("highlight", {"target": target})
+
+    async def perform_scroll(target: str) -> dict:
+        expected_page = UI_SCROLL_TARGETS.get(target)
+        if expected_page is None:
+            return {"status": "error", "code": "unsupported_target"}
+        if current_ui_state is None or current_ui_state.get("currentPage") != expected_page:
+            return {"status": "error", "code": "target_not_visible"}
+        return await execute_ui_action("scroll_to", {"target": target})
+
+    async def execute_ui_intent(command: str, payload: dict) -> dict:
+        if command == "navigate_to":
+            return await perform_navigation(payload.get("view"))
+        if command == "highlight":
+            return await perform_highlight(payload.get("target"))
+        if command == "scroll_to":
+            return await perform_scroll(payload.get("target"))
+        return {"status": "error", "code": "unsupported_action"}
+
+    async def navigate_to(params: FunctionCallParams):
+        await finish_tool_call(
+            params,
+            await perform_navigation(params.arguments.get("view")),
+        )
+
+    async def highlight(params: FunctionCallParams):
+        await finish_tool_call(
+            params,
+            await perform_highlight(params.arguments.get("target")),
+        )
+
+    async def scroll_to(params: FunctionCallParams):
+        await finish_tool_call(
+            params,
+            await perform_scroll(params.arguments.get("target")),
+        )
+
+    navigate_tool = FunctionSchema(
+        name="navigate_to",
+        description=(
+            "Required for every request to show, open, or go to Dashboard, Analytics, or Team. "
+            "This function performs the UI action; never describe the command in spoken text "
+            "instead."
+        ),
+        properties={
+            "view": {
+                "type": "string",
+                "enum": ["dashboard", "analytics", "team"],
+                "description": "The destination requested by the user.",
+            }
+        },
+        required=["view"],
+        handler=navigate_to,
+    )
+    highlight_tool = FunctionSchema(
+        name="highlight",
+        description="Highlight a supported element on the currently visible view.",
+        properties={
+            "target": {
+                "type": "string",
+                "enum": ["total-revenue-card", "traffic-overview"],
+            }
+        },
+        required=["target"],
+        handler=highlight,
+    )
+    scroll_tool = FunctionSchema(
+        name="scroll_to",
+        description="Scroll to the Team member list when the Team view is visible.",
+        properties={
+            "target": {
+                "type": "string",
+                "enum": ["team-member-list"],
+            }
+        },
+        required=["target"],
+        handler=scroll_to,
+    )
+    context = LLMContext(
+        tools=[navigate_tool, highlight_tool, scroll_tool]
+    )
+    ui_intent_gate = UIActionToolChoiceProcessor(
+        context,
+        navigate_tool=navigate_tool,
+        highlight_tool=highlight_tool,
+        scroll_tool=scroll_tool,
+        execute_action=execute_ui_intent,
+    )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
         user_params=LLMUserAggregatorParams(
@@ -219,6 +591,7 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         [
             transport.input(),
             stt,
+            ui_intent_gate,
             user_aggregator,
             llm,
             tts,
@@ -237,6 +610,59 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
         observers=[latency_observer, metrics_observer],
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
     )
+
+    async def update_ui_instruction() -> None:
+        await worker.queue_frame(
+            LLMUpdateSettingsFrame(
+                delta=OLLamaLLMService.Settings(
+                    system_instruction=instruction_with_ui_state(),
+                ),
+                service=llm,
+            )
+        )
+
+    @worker.rtvi.event_handler("on_ui_message")
+    async def on_ui_message(rtvi, message):
+        nonlocal current_ui_state
+        if message.type != "ui-event" or not isinstance(message.data.payload, dict):
+            return
+
+        payload = message.data.payload
+        if message.data.event == "ui_state":
+            current_page = payload.get("currentPage")
+            if current_page not in {"home", *UI_VIEWS}:
+                logger.warning(f"[UI] Ignoring invalid UI state: {payload}")
+                return
+            visible_elements = payload.get("visibleElements")
+            available_actions = payload.get("availableActions")
+            current_ui_state = {
+                "revision": payload.get("revision"),
+                "currentPage": current_page,
+                "selectedTab": payload.get("selectedTab"),
+                "visibleElements": visible_elements[:10]
+                if isinstance(visible_elements, list)
+                else [],
+                "availableActions": available_actions[:10]
+                if isinstance(available_actions, list)
+                else [],
+            }
+            logger.info(f"[UI] State updated: {current_ui_state}")
+            await update_ui_instruction()
+        elif message.data.event == "ui_action_result":
+            command_id = payload.get("commandId")
+            confirmation = pending_ui_actions.get(command_id)
+            if confirmation is None or confirmation.done():
+                logger.debug(f"[UI] Ignoring late or unknown confirmation: {command_id}")
+                return
+
+            if payload.get("status") == "ok" and payload.get("currentPage") in UI_VIEWS:
+                current_ui_state = {
+                    **(current_ui_state or {}),
+                    "currentPage": payload["currentPage"],
+                }
+                await update_ui_instruction()
+            logger.info(f"[UI] Confirmation received for {command_id}: {payload}")
+            confirmation.set_result(payload)
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
