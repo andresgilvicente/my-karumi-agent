@@ -19,25 +19,25 @@ These values and every spoken transition live in `ui_control/guided_demo.json`.
 
 ## Sequence
 
-1. Dashboard navigation and Total Revenue highlight are both confirmed before the explanation.
-2. Analytics navigation and Traffic Overview highlight are both confirmed before the explanation.
+1. Dashboard navigation, Total Revenue centering, and its highlight are confirmed before the explanation.
+2. Analytics navigation, Traffic Overview centering, and its highlight are confirmed before the explanation.
 3. Team navigation and member-list scroll are both confirmed before the explanation.
 4. The agent closes the tour and invites questions.
 
 The sequence uses the existing `UIActionExecutor`; it cannot bypass the shared UI catalog,
-`commandId` matching, five-second action timeout, or React acknowledgement.
+`uiSessionId`/`commandId` matching, five-second action timeout, or React acknowledgement.
 
 ## Controls
 
 The closed deterministic resolver accepts the exact phrase variants declared in
 `ui_control/guided_demo.json`:
 
-- Start: `Start the demo`, `Give me a tour`, `Show me the product`, `Begin the walkthrough`.
+- Start: `Start the demo`, `Start demo`, `Let's start the demo`, `Give me a tour`, `Show me the product`, `Begin the walkthrough`.
 - Continue: `Continue`, `Go on`, `Next`, `Show me the next section`.
 - Pause: `Pause the demo`, `Stop for a moment`, `Hold on`.
 - Resume: `Resume the demo`, `Continue the tour`.
 - Stop: `Stop the demo`, `End the tour`, `Cancel the demo`, `No thanks`, `Not now`.
-- Restart: `Restart the demo`, `Start the tour again`.
+- Restart: `Restart demo`, `Restart the demo`, `Restart the tour`, `Start the demo again`, `Start the tour again`.
 
 Normal questions pass to Qwen. Speaking cancels the pending timer immediately. Once the answer has
 finished playing, the controller opens another four-second intervention window and then continues
@@ -65,6 +65,11 @@ Then connect the React app in Chrome and verify:
 4. Exercise `Pause`, `Resume`, `Continue`, `Stop`, and `Restart`.
 5. Navigate directly to Analytics during an active tour and confirm Team becomes next.
 6. Disconnect while waiting and confirm no later action or speech occurs.
+7. Connect and disconnect five times without refreshing; confirm each new session reaches `connected`
+   and receives a fresh tour offer.
+8. During a tour, request each of the twelve allowlisted focus targets and verify it is centered and highlighted. On Dashboard and Analytics, verify that an unqualified Conversion Rate selects the card on the current view.
+9. Search Team for a matching and a missing member; verify the filter, focus, and spoken result agree.
+10. Finish on Team, say `Restart demo`, and confirm the visual sequence starts again at Dashboard before advancing through Analytics and Team.
 
 Every successful step must show matching navigation and default-focus confirmations in the backend
 log before its explanation is spoken.

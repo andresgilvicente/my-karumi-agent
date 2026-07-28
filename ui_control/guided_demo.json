@@ -11,6 +11,8 @@
   "intents": {
     "start_demo": [
       "start the demo",
+      "start demo",
+      "let's start the demo",
       "give me a tour",
       "show me the product",
       "begin the walkthrough"
@@ -39,6 +41,9 @@
     ],
     "restart_demo": [
       "restart the demo",
+      "restart demo",
+      "restart the tour",
+      "start the demo again",
       "start the tour again"
     ]
   },

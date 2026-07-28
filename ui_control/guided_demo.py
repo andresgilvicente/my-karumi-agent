@@ -428,8 +428,8 @@ class GuidedDemoController:
 
     async def on_external_action(self, command: str, payload: dict, result: dict) -> None:
         if (
-            result.get("status") != "confirmed"
-            or command != "navigate_to"
+            command not in {"navigate_to", "focus_target", "search_team_member"}
+            or (result.get("status") != "confirmed" and not result.get("screenConfirmed"))
             or self.state
             in {
                 GuidedDemoState.IDLE,
@@ -443,14 +443,17 @@ class GuidedDemoController:
             self._cancel_timer()
             self.state = GuidedDemoState.CANCELLED
             return
-        view = payload.get("view")
+        view = result.get("view") or payload.get("view")
         for index, step in enumerate(self.definition.steps):
             if step.payload.get("view") == view:
                 self._cancel_timer()
                 self._pending_explanation_step = None
                 self.current_step_index = index
-                self.last_confirmed_step = step.id
-                self.next_step_index = index + 1
+                if result.get("status") == "confirmed":
+                    self.last_confirmed_step = step.id
+                    self.next_step_index = index + 1
+                else:
+                    self.next_step_index = index
                 self.state = (
                     GuidedDemoState.PAUSED
                     if self._explicitly_paused

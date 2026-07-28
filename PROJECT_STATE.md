@@ -9,24 +9,27 @@ Updated: 2026-07-28
 - The first UI-control phase is complete. Supported voice requests can navigate to Dashboard, Analytics, or Team and then confirm the destination's standard highlight or scroll action.
 - Semantic UI control is now centralized in a versioned catalog shared by React and Python; the backend validates advertised capabilities per action and ignores stale UI state.
 - The backend now owns a declarative autonomous tour through Dashboard, Analytics, and Team, with a proactive offer, deterministic controls, interruption-safe continuation, and silence-based advancement.
+- The stabilization/enrichment phase adds serialized reconnect settling, session-bound UI acknowledgements, twelve focus targets, centered Analytics presentation, natural navigation phrasing, contextual Tim handling, and Team member search.
 - Repository setup, architecture, command-contract, and validation guidance reflect the connected implementation.
 
 ## Implemented Components
 
 - Voice: WebRTC input/output, Whisper transcription, VAD start detection, speech-timeout turn completion, Ollama responses, Kokoro speech, automatic introduction, conversation context, and native per-stage/end-to-end latency observers.
 - Frontend: Home, Dashboard Overview/Goals, Analytics, and Team views with hash navigation, responsive CSS, keyboard-operated dashboard tabs, in-memory team filtering, voice connection/microphone controls, and voice activity status.
-- UI bridge: catalog-derived route and capability publication through `ui_state`; idempotent `navigate_to`, `highlight`, and `scroll_to` handlers; and `ui_action_result` acknowledgements correlated by `commandId`.
+- UI bridge: catalog-derived route and capability publication through session-bound `ui_state`; concurrent-safe idempotent navigation, highlight, scroll, and Team search handlers; and acknowledgements correlated by `uiSessionId` and `commandId`.
 - Backend orchestration: dynamic React state in the LLM instruction, catalog-derived tool schemas, five-second action timeouts, confirmation-aware responses, and deterministic dispatch for explicit allowlisted requests.
 - Context safety: deterministic turns commit the user request and confirmed assistant response before audio synthesis, so an interruption does not erase the confirmed action from later LLM context.
 - Kokoro applies Pipecat's sentence-level Markdown filter before synthesis so emphasis markers are not pronounced without changing Qwen's response generation.
 - Optional local profiling correlates VAD, logical turn completion, STT/LLM/TTS metrics, first audio, resolution path, and confirmed UI action timing in JSONL without changing normal runtime behavior.
-- Navigation compounds the expected focus action: Dashboard highlights Total Revenue, Analytics highlights Traffic Overview, and Team scrolls to the member list.
+- Navigation compounds the expected focus action: Dashboard centers and highlights Total Revenue, Analytics centers and highlights Traffic Overview, and Team scrolls to the member list.
+- Direct focus requests navigate as needed, center and highlight twelve allowlisted targets, and synchronize an active tour only after confirmed navigation. Duplicate labels such as Conversion Rate resolve from the current view or an explicit view qualifier. Team search uses the same in-memory predicate as the rendered member list and reports confirmed names/counts.
+- Frontend connection controls reuse one SmallWebRTC client, serialize operations, and delay retry through a disconnect-settling window; backend action generations and frontend UI session nonces isolate replacement sessions.
 - Guided-demo actions reuse the same serialized executor and acknowledgement contract; Qwen answers questions but never controls the tour state.
 
 ## Current Constraints
 
 - Frontend data is representative and in memory; there is no persistence or backend data API.
-- UI control is intentionally limited to Dashboard, Analytics, and Team navigation plus two highlights and one scroll target. Goals, search, analytics tabs, and generic screen control remain out of scope.
+- UI control is intentionally limited to Dashboard, Analytics, and Team navigation, twelve catalog focus targets, and Team member search. Goals, analytics tabs, directional scrolling, and generic screen control remain out of scope.
 - Explicit allowlisted requests bypass Qwen's tool selection because `qwen2.5:1.5b` can narrate an action even when a tool is required. Ollama still handles normal product conversation, and function tools remain a fallback.
 - Whisper emits completed utterances rather than streaming partial transcripts. The semantic resolver retains a short previous transcript so a split phrase such as `Can you take me?` followed by `to Analytics` can still navigate.
 - Whisper `base` still misses product vocabulary such as `Pipecat` and `Metric Master Suite`; custom vocabulary support remains deferred.
@@ -47,6 +50,9 @@ Updated: 2026-07-28
 - On 2026-07-28, the opt-in JSONL profiler passed standard-library tests for disabled behavior, correlated turn/action records, interruption summaries, Python compilation, and import.
 - On 2026-07-28, 39 standard-library tests passed for the guided-demo state machine, closed controls, proactive and silent advancement, interruption races, serialized actions, consumed-turn finalization, failure handling, and disconnect cleanup. Python compilation/import and the Vite build also passed.
 - On 2026-07-28, a manual Chrome run passed the complete silent Dashboard -> Analytics -> Team sequence and completion message. Interruption and explicit control variants remain separate manual checks.
+- On 2026-07-28, 59 standard-library tests passed for semantic UI control, session isolation, guided-demo behavior, focus sequencing, and Team search. Python compilation/import, `git diff --check`, and the Linux Node 24 Vite build also passed; the generated JavaScript chunk is 675.81 kB and retains the known size warning.
+- Manual Chrome validation of repeated reconnects and the enriched focus/search matrix remains pending.
+- On 2026-07-28, contract v3 passed 63 standard-library tests covering all twelve focus targets, view-aware Conversion Rate resolution, ambiguous-target rejection, session-safe execution, and a Team -> Dashboard -> Analytics -> Team restart. Python compilation/import and `git diff --check` passed; the Vite build produced a 678.40 kB JavaScript chunk with the existing size warning.
 
 ## Relevant Files
 
@@ -70,5 +76,5 @@ Updated: 2026-07-28
 1. Treat the current three-route vertical demo as the baseline and avoid expanding the command surface without a concrete demo need.
 2. If broader phrasing becomes necessary, replace or augment the compact semantic resolver without weakening the command allowlists or confirmation contract.
 3. Collect the fixed local latency corpus before changing model or timeout settings; profile conversational latency separately from deterministic UI actions.
-4. Manually validate and tune the guided-demo cadence without widening the frontend command contract.
+4. Manually validate repeated reconnects, tour controls including restart from Team, all twelve focus targets, and Team search before treating the stabilization/enrichment phase as complete.
 5. Keep the standard-library semantic UI and guided-demo tests current whenever either declarative catalog changes; introduce broader test infrastructure only when the surface grows beyond this small contract.

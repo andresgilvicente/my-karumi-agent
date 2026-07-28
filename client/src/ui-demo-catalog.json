@@ -1,8 +1,8 @@
 {
-  "uiContractVersion": 1,
+  "uiContractVersion": 3,
   "commands": {
     "navigate_to": {
-      "description": "Required for every request to show, open, or go to Dashboard, Analytics, or Team. This function performs the UI action; never describe the command in spoken text instead.",
+      "description": "Open a supported product view and run its confirmed presentation actions.",
       "payloadKey": "view"
     },
     "highlight": {
@@ -10,8 +10,18 @@
       "payloadKey": "target"
     },
     "scroll_to": {
-      "description": "Scroll to the Team member list when the Team view is visible.",
+      "description": "Center a supported element on the currently visible view.",
       "payloadKey": "target"
+    },
+    "search_team_member": {
+      "description": "Search Team members by name and return only the matches confirmed by React.",
+      "payloadKey": "query",
+      "view": "team"
+    },
+    "focus_target": {
+      "description": "Open and focus a supported product panel using confirmed navigation, scroll, and highlight actions.",
+      "payloadKey": "target",
+      "clientCommand": false
     }
   },
   "navigationPhrases": [
@@ -19,66 +29,190 @@
     "take me",
     "bring me",
     "go to",
+    "go back to",
     "open",
-    "navigate",
+    "navigate to",
     "switch to",
     "move to",
     "visit",
-    "look at"
+    "look at",
+    "take me back to",
+    "return to"
   ],
-  "fallbackNavigationPhrases": ["show me", "take me", "go to", "open", "navigate"],
-  "focusPhrases": ["highlight", "focus", "emphasize"],
+  "fallbackNavigationPhrases": ["show me", "take me", "go to", "open", "navigate to"],
+  "focusPhrases": ["highlight", "focus on", "emphasize", "show me", "take me to", "where is"],
   "scrollPhrases": ["scroll"],
+  "teamSearchPhrases": [
+    "search for {query} on the team",
+    "search for {query}",
+    "is there anyone called {query}",
+    "does someone named {query} work here",
+    "find a team member called {query}",
+    "do we have a {query} on the team",
+    "is anyone named {query}",
+    "look for {query} in the team"
+  ],
+  "nonPersonSearchTerms": [
+    "admin",
+    "analytics",
+    "conversion",
+    "dashboard",
+    "engineer",
+    "goals",
+    "growth",
+    "metrics",
+    "monthly",
+    "performance",
+    "product",
+    "quarterly",
+    "revenue",
+    "income",
+    "sources",
+    "traffic",
+    "users"
+  ],
   "views": {
     "dashboard": {
       "hash": "#dashboard",
-      "elementId": "dashboard-title",
-      "aliases": ["dashboard", "revenue"],
+      "elementId": "dashboard-overview",
+      "aliases": ["dashboard"],
+      "navigationAliases": ["dashboard"],
       "defaultAction": {
         "command": "highlight",
         "target": "total-revenue-card"
       },
-      "successMessage": "The Dashboard is open, with Total Revenue highlighted."
+      "navigationActions": [
+        { "command": "scroll_to", "target": "total-revenue-card" },
+        { "command": "highlight", "target": "total-revenue-card" }
+      ],
+      "successMessage": "The Dashboard is open, with Total Revenue centered and highlighted."
     },
     "analytics": {
       "hash": "#analytics",
       "elementId": "analytics-title",
-      "aliases": ["analytics", "traffic"],
+      "aliases": ["analytics"],
+      "navigationAliases": ["analytics"],
       "defaultAction": {
         "command": "highlight",
         "target": "traffic-overview"
       },
-      "successMessage": "Analytics is open, with Traffic Overview highlighted."
+      "navigationActions": [
+        { "command": "scroll_to", "target": "traffic-overview" },
+        { "command": "highlight", "target": "traffic-overview" }
+      ],
+      "successMessage": "Analytics is open, with Traffic Overview centered and highlighted."
     },
     "team": {
       "hash": "#team",
       "elementId": "team-title",
       "aliases": ["team", "member list", "members"],
+      "navigationAliases": ["team", "tim", "member list", "members", "tim members"],
       "defaultAction": {
         "command": "scroll_to",
         "target": "team-member-list"
       },
-      "successMessage": "The Team view is open, and I've scrolled to the member list."
+      "navigationActions": [
+        { "command": "scroll_to", "target": "team-member-list" }
+      ],
+      "successMessage": "The Team view is open, and I've centered the member list."
     }
   },
   "targets": {
     "total-revenue-card": {
       "command": "highlight",
+      "allowedCommands": ["scroll_to", "highlight"],
       "view": "dashboard",
-      "resolverAliases": ["dashboard", "revenue"],
-      "successMessage": "I've highlighted Total Revenue."
+      "label": "Total Revenue",
+      "resolverAliases": ["total revenue", "revenue"],
+      "successMessage": "I've centered and highlighted Total Revenue."
+    },
+    "active-users-card": {
+      "command": "highlight",
+      "allowedCommands": ["scroll_to", "highlight"],
+      "view": "dashboard",
+      "label": "Active Users",
+      "resolverAliases": ["active users", "users"],
+      "successMessage": "I've centered and highlighted Active Users."
+    },
+    "conversion-rate-card": {
+      "command": "highlight",
+      "allowedCommands": ["scroll_to", "highlight"],
+      "view": "dashboard",
+      "label": "Conversion Rate",
+      "resolverAliases": ["dashboard conversion rate", "conversion rate", "conversion"],
+      "successMessage": "I've centered and highlighted Conversion Rate on the Dashboard."
+    },
+    "growth-rate-card": {
+      "command": "highlight",
+      "allowedCommands": ["scroll_to", "highlight"],
+      "view": "dashboard",
+      "label": "Growth Rate",
+      "resolverAliases": ["growth rate", "growth"],
+      "successMessage": "I've centered and highlighted Growth Rate."
+    },
+    "performance-overview": {
+      "command": "highlight",
+      "allowedCommands": ["scroll_to", "highlight"],
+      "view": "dashboard",
+      "label": "Performance Overview",
+      "resolverAliases": ["performance overview", "performance"],
+      "successMessage": "I've centered and highlighted Performance Overview."
+    },
+    "page-views-card": {
+      "command": "highlight",
+      "allowedCommands": ["scroll_to", "highlight"],
+      "view": "analytics",
+      "label": "Page Views",
+      "resolverAliases": ["page views", "paid views", "page view"],
+      "successMessage": "I've centered and highlighted Page Views."
+    },
+    "click-through-rate-card": {
+      "command": "highlight",
+      "allowedCommands": ["scroll_to", "highlight"],
+      "view": "analytics",
+      "label": "Click-through Rate",
+      "resolverAliases": ["click through rate", "click-through rate", "clickthrough rate", "ctr"],
+      "successMessage": "I've centered and highlighted Click-through Rate."
+    },
+    "session-duration-card": {
+      "command": "highlight",
+      "allowedCommands": ["scroll_to", "highlight"],
+      "view": "analytics",
+      "label": "Average Session Duration",
+      "resolverAliases": ["average session duration", "avg session duration", "session duration"],
+      "successMessage": "I've centered and highlighted Average Session Duration."
+    },
+    "analytics-conversion-card": {
+      "command": "highlight",
+      "allowedCommands": ["scroll_to", "highlight"],
+      "view": "analytics",
+      "label": "Conversion Rate",
+      "resolverAliases": ["analytics conversion rate", "conversion rate", "conversion"],
+      "successMessage": "I've centered and highlighted Conversion Rate in Analytics."
     },
     "traffic-overview": {
       "command": "highlight",
+      "allowedCommands": ["scroll_to", "highlight"],
       "view": "analytics",
-      "resolverAliases": ["analytics", "traffic"],
-      "successMessage": "I've highlighted Traffic Overview."
+      "label": "Traffic Overview",
+      "resolverAliases": ["traffic overview", "traffic"],
+      "successMessage": "I've centered and highlighted Traffic Overview."
+    },
+    "traffic-sources": {
+      "command": "highlight",
+      "allowedCommands": ["scroll_to", "highlight"],
+      "view": "analytics",
+      "label": "Traffic Sources",
+      "resolverAliases": ["traffic sources", "sources"],
+      "successMessage": "I've centered and highlighted Traffic Sources."
     },
     "team-member-list": {
       "command": "scroll_to",
+      "allowedCommands": ["scroll_to", "highlight"],
       "view": "team",
-      "resolverAliases": ["team", "member", "list"],
-      "successMessage": "I've scrolled to the Team member list."
+      "label": "Team member list",
+      "resolverAliases": ["team member list", "member list", "team members"],
+      "successMessage": "I've centered and highlighted the Team member list."
     }
   },
   "errorMessage": "I couldn't update the interface. Please try again."

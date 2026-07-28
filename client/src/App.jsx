@@ -20,6 +20,7 @@ const NAVIGATION = [
 
 const TEAM_MEMBERS = [
   {
+    id: "olivia-chen",
     name: "Olivia Chen",
     email: "olivia@saasapp.io",
     role: "Admin",
@@ -28,6 +29,7 @@ const TEAM_MEMBERS = [
     avatar: "avatar-warm",
   },
   {
+    id: "ethan-miller",
     name: "Ethan Miller",
     email: "ethan@saasapp.io",
     role: "Product Manager",
@@ -36,6 +38,7 @@ const TEAM_MEMBERS = [
     avatar: "avatar-blue",
   },
   {
+    id: "sophia-patel",
     name: "Sophia Patel",
     email: "sophia@saasapp.io",
     role: "Analyst",
@@ -44,6 +47,7 @@ const TEAM_MEMBERS = [
     avatar: "avatar-green",
   },
   {
+    id: "liam-brown",
     name: "Liam Brown",
     email: "liam@saasapp.io",
     role: "Engineer",
@@ -52,6 +56,7 @@ const TEAM_MEMBERS = [
     avatar: "avatar-purple",
   },
   {
+    id: "ava-martin",
     name: "Ava Martin",
     email: "ava@saasapp.io",
     role: "Designer",
@@ -60,6 +65,7 @@ const TEAM_MEMBERS = [
     avatar: "avatar-pink",
   },
   {
+    id: "noah-williams",
     name: "Noah Williams",
     email: "noah@saasapp.io",
     role: "Admin",
@@ -68,6 +74,7 @@ const TEAM_MEMBERS = [
     avatar: "avatar-orange",
   },
   {
+    id: "mia-davis",
     name: "Mia Davis",
     email: "mia@saasapp.io",
     role: "Marketing Lead",
@@ -76,6 +83,7 @@ const TEAM_MEMBERS = [
     avatar: "avatar-cyan",
   },
   {
+    id: "lucas-anderson",
     name: "Lucas Anderson",
     email: "lucas@saasapp.io",
     role: "Support Lead",
@@ -85,6 +93,15 @@ const TEAM_MEMBERS = [
   },
 ];
 
+function filterTeamMembers(members, query) {
+  const normalizedQuery = query.trim().toLowerCase();
+  return members.filter((member) =>
+    `${member.name} ${member.email} ${member.role} ${member.team}`
+      .toLowerCase()
+      .includes(normalizedQuery),
+  );
+}
+
 function getRouteFromHash() {
   const route = window.location.hash.slice(1);
   return ROUTES[route] ? route : "home";
@@ -92,6 +109,7 @@ function getRouteFromHash() {
 
 function App() {
   const [routeName, setRouteName] = useState(getRouteFromHash);
+  const [teamQuery, setTeamQuery] = useState("");
   const route = ROUTES[routeName];
 
   useEffect(() => {
@@ -114,7 +132,7 @@ function App() {
 
   useEffect(() => {
     document.title = `${route.title} | Karumi Agent`;
-    window.scrollTo({ top: 0, behavior: "auto" });
+    window.scrollTo({ top: 0, behavior: "instant" });
   }, [route]);
 
   function skipToContent(event) {
@@ -130,7 +148,13 @@ function App() {
         Skip to main content
       </a>
 
-      <UICommandBridge routeName={routeName} />
+      <UICommandBridge
+        routeName={routeName}
+        teamMembers={TEAM_MEMBERS}
+        filterTeamMembers={filterTeamMembers}
+        teamQuery={teamQuery}
+        setTeamQuery={setTeamQuery}
+      />
 
       <div className="app-shell">
         <Sidebar activeView={route.view} />
@@ -142,7 +166,9 @@ function App() {
             {route.view === "home" && <HomeView />}
             {route.view === "dashboard" && <DashboardView panel={route.panel} />}
             {route.view === "analytics" && <AnalyticsView />}
-            {route.view === "team" && <TeamView />}
+            {route.view === "team" && (
+              <TeamView query={teamQuery} setQuery={setTeamQuery} />
+            )}
           </main>
         </div>
       </div>
@@ -562,14 +588,9 @@ function AnalyticsView() {
   );
 }
 
-function TeamView() {
-  const [query, setQuery] = useState("");
+function TeamView({ query, setQuery }) {
   const normalizedQuery = query.trim().toLowerCase();
-  const visibleMembers = TEAM_MEMBERS.filter((member) =>
-    `${member.name} ${member.email} ${member.role} ${member.team}`
-      .toLowerCase()
-      .includes(normalizedQuery),
-  );
+  const visibleMembers = filterTeamMembers(TEAM_MEMBERS, query);
 
   return (
     <section className="view" aria-labelledby="team-title">
@@ -624,7 +645,7 @@ function TeamView() {
               </thead>
               <tbody>
                 {visibleMembers.map((member) => (
-                  <tr key={member.email}>
+                  <tr key={member.email} id={`team-member-${member.id}`}>
                     <td>
                       <div className="member">
                         <span className={`avatar ${member.avatar}`} aria-hidden="true">

@@ -281,20 +281,39 @@ h4 {
 }
 
 .voice-highlight {
+  position: relative;
+  z-index: 2;
   animation: voice-highlight-pulse 2.2s ease-out;
+}
+
+#total-revenue-card,
+#active-users-card,
+#conversion-rate-card,
+#growth-rate-card,
+#performance-overview,
+#page-views-card,
+#click-through-rate-card,
+#session-duration-card,
+#analytics-conversion-card,
+#traffic-overview,
+#traffic-sources,
+#team-member-list {
+  scroll-margin-block: clamp(72px, 12vh, 112px);
 }
 
 @keyframes voice-highlight-pulse {
   0%,
-  30% {
-    outline: 3px solid #d69f38;
-    outline-offset: 4px;
-    box-shadow: 0 0 0 10px rgb(214 159 56 / 16%);
+  45% {
+    outline: 4px solid #c88818;
+    outline-offset: 5px;
+    box-shadow: 0 0 0 12px rgb(214 159 56 / 22%), 0 18px 44px rgb(54 45 26 / 18%);
+    transform: translateY(-2px);
   }
   100% {
-    outline: 3px solid transparent;
-    outline-offset: 8px;
-    box-shadow: 0 0 0 18px transparent;
+    outline: 4px solid transparent;
+    outline-offset: 10px;
+    box-shadow: 0 0 0 20px transparent;
+    transform: translateY(0);
   }
 }
 
@@ -1355,5 +1374,12 @@ td:first-child {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .voice-highlight {
+    animation: none !important;
+    outline: 4px solid #c88818;
+    outline-offset: 5px;
+    box-shadow: 0 0 0 12px rgb(214 159 56 / 22%);
   }
 }

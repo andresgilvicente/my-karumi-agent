@@ -1,45 +1,172 @@
+import re
+
 from ui_control.catalog import UIControlCatalog
 
 
+def _normalize(text: str) -> str:
+    return " ".join(
+        re.sub(r"[^\w\s']", " ", text.casefold().replace("’", "'")).split()
+    )
+
+
+def _phrase_index(text: str, phrase: str) -> int | None:
+    pattern = r"(?<!\w)" + r"\s+".join(re.escape(part) for part in phrase.split()) + r"(?!\w)"
+    match = re.search(pattern, text)
+    return match.start() if match else None
+
+
 def _first_phrase_index(text: str, phrases: list[str] | tuple[str, ...]) -> int | None:
-    indexes = [text.find(phrase) for phrase in phrases if phrase in text]
+    indexes = [_phrase_index(text, phrase) for phrase in phrases]
+    indexes = [index for index in indexes if index is not None]
     return min(indexes) if indexes else None
 
 
-def _requested_view(text: str, catalog: UIControlCatalog) -> tuple[str, int] | None:
-    matches = {
-        view: _first_phrase_index(text, definition["aliases"])
-        for view, definition in catalog.views.items()
-    }
+def _requested_views(text: str, catalog: UIControlCatalog) -> dict[str, int]:
+    matches = {}
+    for view, definition in catalog.views.items():
+        indexes = []
+        for alias in definition["navigationAliases"]:
+            index = _phrase_index(text, alias)
+            if index is None:
+                continue
+            if alias == "tim":
+                suffix = text[index + len(alias) :].strip()
+                if suffix and not suffix.startswith(("section", "members", "member list")):
+                    continue
+            indexes.append(index)
+        matches[view] = min(indexes) if indexes else None
     matches = {view: index for view, index in matches.items() if index is not None}
+    return matches
+
+
+def _requested_view(text: str, catalog: UIControlCatalog) -> tuple[str, int] | None:
+    matches = _requested_views(text, catalog)
     if len(matches) != 1:
         return None
     return next(iter(matches.items()))
+
+
+def _requested_target(
+    text: str,
+    catalog: UIControlCatalog,
+    preferred_view: str | None = None,
+) -> tuple[str, int] | None:
+    matches: list[tuple[str, int, int]] = []
+    for target, definition in catalog.targets.items():
+        for alias in definition["resolverAliases"]:
+            index = _phrase_index(text, alias)
+            if index is not None:
+                matches.append((target, index, len(alias)))
+    if not matches:
+        return None
+
+    strongest = []
+    for match in matches:
+        _, start, length = match
+        end = start + length
+        if any(
+            other_start <= start
+            and other_start + other_length >= end
+            and other_length > length
+            for _, other_start, other_length in matches
+        ):
+            continue
+        strongest.append(match)
+    targets = {target for target, _, _ in strongest}
+    spans = {(start, length) for _, start, length in strongest}
+    if len(targets) > 1 and len(spans) == 1 and preferred_view is not None:
+        preferred_targets = {
+            target
+            for target in targets
+            if catalog.targets[target]["view"] == preferred_view
+        }
+        if len(preferred_targets) == 1:
+            targets = preferred_targets
+            strongest = [match for match in strongest if match[0] in targets]
+    if len(targets) != 1:
+        return None
+    target = targets.pop()
+    return target, min(index for candidate, index, _ in strongest if candidate == target)
+
+
+def _team_search_query(text: str, catalog: UIControlCatalog) -> str | None:
+    for prefix in ("can you ", "could you ", "please "):
+        if text.startswith(prefix):
+            text = text[len(prefix) :]
+            break
+    for template in catalog.data["teamSearchPhrases"]:
+        prefix, suffix = template.split("{query}")
+        pattern = "^" + re.escape(prefix).replace(r"\ ", r"\s+")
+        pattern += r"(?P<query>.+?)"
+        pattern += re.escape(suffix).replace(r"\ ", r"\s+") + "$"
+        match = re.match(pattern, text)
+        if match:
+            query = match.group("query").strip(" ' ")
+            if template == "search for {query}" and len(query.split()) != 1:
+                return None
+            reserved_queries = {
+                alias.casefold()
+                for definition in catalog.views.values()
+                for alias in definition["navigationAliases"]
+            }
+            reserved_queries.update(
+                alias.casefold()
+                for definition in catalog.targets.values()
+                for alias in definition["resolverAliases"]
+            )
+            query_words = set(query.split())
+            blocked_words = set(catalog.data["nonPersonSearchTerms"])
+            return (
+                query.title()
+                if query
+                and query not in reserved_queries
+                and query_words.isdisjoint(blocked_words)
+                else None
+            )
+    return None
 
 
 def resolve_ui_intent(
     text: str,
     catalog: UIControlCatalog,
     previous_text: str = "",
+    current_view: str | None = None,
 ) -> tuple[str, dict] | None:
-    """Resolve only the catalog's explicit, allowlisted semantic UI actions."""
-    current = text.casefold().strip()
-    previous = previous_text.casefold().strip()
-    requested_view = _requested_view(current, catalog)
+    """Resolve only explicit, allowlisted product actions."""
+    current = _normalize(text)
+    previous = _normalize(previous_text)
 
-    for target, definition in catalog.targets.items():
-        if definition["command"] == "scroll_to" and _first_phrase_index(
-            current, catalog.data["scrollPhrases"]
-        ) is not None and _first_phrase_index(current, definition["resolverAliases"]) is not None:
+    search_query = _team_search_query(current, catalog)
+    if search_query:
+        return "search_team_member", {"query": search_query}
+
+    requested_views = _requested_views(current, catalog)
+    requested_view = (
+        next(iter(requested_views.items())) if len(requested_views) == 1 else None
+    )
+    preferred_view = requested_view[0] if requested_view is not None else current_view
+    requested_target = (
+        _requested_target(current, catalog, preferred_view)
+        if len(requested_views) <= 1
+        else None
+    )
+    if (
+        requested_target is not None
+        and requested_view is not None
+        and catalog.targets[requested_target[0]]["view"] != requested_view[0]
+    ):
+        return None
+    scroll_index = _first_phrase_index(current, catalog.data["scrollPhrases"])
+    if scroll_index is not None and requested_target is not None:
+        target, target_index = requested_target
+        if scroll_index < target_index and catalog.target_supports_command(target, "scroll_to"):
             return "scroll_to", {"target": target}
 
     focus_index = _first_phrase_index(current, catalog.data["focusPhrases"])
-    if focus_index is not None and requested_view is not None:
-        view, target_index = requested_view
+    if focus_index is not None and requested_target is not None:
+        target, target_index = requested_target
         if focus_index < target_index:
-            default_action = catalog.views[view]["defaultAction"]
-            if default_action["command"] == "highlight":
-                return default_action["command"], {"target": default_action["target"]}
+            return "focus_target", {"target": target}
 
     if requested_view is None:
         return None
@@ -52,24 +179,45 @@ def resolve_ui_intent(
     )
     if (navigation_index is not None and navigation_index < target_index) or continued_navigation:
         return "navigate_to", {"view": view}
-
     return None
 
 
-def fallback_tool_name(text: str, catalog: UIControlCatalog) -> str | None:
-    """Keep the pre-existing limited Qwen fallback without widening its surface."""
-    current = text.casefold()
-    fallback_targets = ["there"]
-    for definition in catalog.views.values():
-        fallback_targets.extend(definition["aliases"])
-
-    if _first_phrase_index(current, catalog.data["scrollPhrases"]) is not None:
+def fallback_tool_name(
+    text: str,
+    catalog: UIControlCatalog,
+    current_view: str | None = None,
+) -> str | None:
+    """Keep a limited Qwen fallback without widening the allowlisted surface."""
+    current = _normalize(text)
+    requested_views = _requested_views(current, catalog)
+    requested_view = (
+        next(iter(requested_views.items())) if len(requested_views) == 1 else None
+    )
+    preferred_view = requested_view[0] if requested_view is not None else current_view
+    requested_target = (
+        _requested_target(current, catalog, preferred_view)
+        if len(requested_views) <= 1
+        else None
+    )
+    if (
+        requested_target is not None
+        and requested_view is not None
+        and catalog.targets[requested_target[0]]["view"] != requested_view[0]
+    ):
+        return None
+    if (
+        requested_target is not None
+        and _first_phrase_index(current, catalog.data["scrollPhrases"]) is not None
+    ):
         return "scroll_to"
-    if _first_phrase_index(current, catalog.data["focusPhrases"][:2]) is not None:
-        return "highlight"
+    if (
+        requested_target is not None
+        and _first_phrase_index(current, catalog.data["focusPhrases"]) is not None
+    ):
+        return "focus_target"
     if (
         _first_phrase_index(current, catalog.data["fallbackNavigationPhrases"]) is not None
-        and _first_phrase_index(current, fallback_targets) is not None
+        and requested_view is not None
     ):
         return "navigate_to"
     return None

@@ -91,11 +91,13 @@ class GuidedDemoTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([step.id for step in self.definition.steps], ["dashboard", "analytics", "team"])
         cases = {
             "Start the demo.": "start_demo",
+            "Let's start the demo.": "start_demo",
             "Go on.": "continue_demo",
             "Hold on.": "pause_demo",
             "Continue the tour.": "resume_demo",
             "Cancel the demo.": "stop_demo",
             "Start the tour again.": "restart_demo",
+            "Restart demo.": "restart_demo",
             "Tell me about the product.": None,
         }
         for text, expected in cases.items():
@@ -144,6 +146,24 @@ class GuidedDemoTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.last_confirmed_step, "dashboard")
         self.assertEqual(self.controller.next_step_index, 1)
         self.assertEqual(self.speech[-1][0], self.definition.steps[0].explanation)
+
+        for step_index in (1, 2):
+            await self.finish_current_speech()
+            await self.sleep.release_next()
+            self.assertEqual(
+                self.speech[-1][0],
+                self.definition.steps[step_index].transition_message,
+            )
+            await self.finish_current_speech()
+            await self.controller.wait_for_action()
+            self.assertEqual(
+                self.actions[-1],
+                ("navigate_to", {"view": self.definition.steps[step_index].id}),
+            )
+            self.assertEqual(
+                self.controller.last_confirmed_step,
+                self.definition.steps[step_index].id,
+            )
 
     async def test_failed_action_never_speaks_the_explanation_or_advances(self):
         self.action_result = {"status": "timeout"}
@@ -269,6 +289,30 @@ class GuidedDemoTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.state, GuidedDemoState.CANCELLED)
         self.assertFalse(self.controller.pending_auto_advance)
 
+    async def test_restart_from_team_resets_and_executes_dashboard(self):
+        await self.connect_and_offer()
+        self.controller.state = GuidedDemoState.WAITING_FOR_USER
+        self.controller.current_step_index = 2
+        self.controller.last_confirmed_step = "team"
+        self.controller.next_step_index = 3
+
+        self.controller.on_user_started_speaking()
+        self.assertTrue(
+            await self.controller.handle_control("restart_demo", "Restart demo.")
+        )
+        self.assertEqual(self.controller.current_step_index, 0)
+        self.assertIsNone(self.controller.last_confirmed_step)
+        self.assertEqual(self.controller.next_step_index, 0)
+        self.assertEqual(self.speech[-1][0], self.definition.steps[0].transition_message)
+
+        await self.finish_current_speech()
+        await self.controller.wait_for_action()
+
+        self.assertEqual(self.actions[-1], ("navigate_to", {"view": "dashboard"}))
+        self.assertEqual(self.controller.last_confirmed_step, "dashboard")
+        self.assertEqual(self.controller.next_step_index, 1)
+        self.assertEqual(self.speech[-1][0], self.definition.steps[0].explanation)
+
     async def test_external_navigation_synchronizes_the_next_step(self):
         await self.start_explicit_demo()
         await self.controller.on_external_action(
@@ -283,6 +327,39 @@ class GuidedDemoTestCase(unittest.IsolatedAsyncioTestCase):
         await self.controller.handle_control("continue_demo", "Continue.")
         self.assertEqual(self.controller.current_step_index, 2)
         self.assertEqual(self.speech[-1][0], self.definition.steps[2].transition_message)
+
+    async def test_external_focus_and_search_synchronize_the_tour_view(self):
+        await self.start_explicit_demo()
+        await self.controller.on_external_action(
+            "focus_target",
+            {"target": "traffic-sources"},
+            {"status": "confirmed", "view": "analytics"},
+        )
+        self.assertEqual(self.controller.last_confirmed_step, "analytics")
+        self.assertEqual(self.controller.next_step_index, 2)
+
+        await self.controller.on_external_action(
+            "search_team_member",
+            {"query": "Olivia"},
+            {"status": "confirmed", "view": "team"},
+        )
+        self.assertEqual(self.controller.last_confirmed_step, "team")
+        self.assertEqual(self.controller.next_step_index, 3)
+
+    async def test_partial_external_navigation_retries_the_visible_step(self):
+        await self.start_explicit_demo()
+        await self.controller.on_external_action(
+            "navigate_to",
+            {"view": "analytics"},
+            {
+                "status": "error",
+                "view": "analytics",
+                "screenConfirmed": True,
+            },
+        )
+        self.assertEqual(self.controller.current_step_index, 1)
+        self.assertEqual(self.controller.next_step_index, 1)
+        self.assertIsNone(self.controller.last_confirmed_step)
 
     async def test_external_navigation_does_not_resume_an_explicit_pause(self):
         await self.start_explicit_demo()

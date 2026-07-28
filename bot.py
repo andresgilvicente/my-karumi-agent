@@ -104,6 +104,38 @@ def log_agent_response(text: str) -> None:
     )
 
 
+def reject_pending_ui_actions(
+    pending_actions: dict[str, tuple[asyncio.Future, str, dict, int]],
+    code: str,
+) -> int:
+    """Settle all session-bound UI waits before their transport disappears."""
+    count = 0
+    for command_id, (confirmation, command, _, _) in list(pending_actions.items()):
+        if not confirmation.done():
+            confirmation.set_result(
+                {
+                    "status": "error",
+                    "code": code,
+                    "command": command,
+                    "commandId": command_id,
+                }
+            )
+            count += 1
+    pending_actions.clear()
+    return count
+
+
+def pending_ui_action_for_session(
+    pending_actions: dict[str, tuple[asyncio.Future, str, dict, int]],
+    command_id: str | None,
+    session_generation: int,
+) -> tuple[asyncio.Future, str, dict, int] | None:
+    pending_action = pending_actions.get(command_id or "")
+    if pending_action is None or pending_action[0].done():
+        return None
+    return pending_action if pending_action[3] == session_generation else None
+
+
 # ---------------------------------------------------------------------------
 # Agent personality
 # ---------------------------------------------------------------------------
@@ -123,13 +155,12 @@ You can control the connected Metric Master Suite interface only through the pro
 this MVP, call tools before giving the final spoken response. A tool action is complete only when
 its result has status "confirmed". Never say or imply that an action succeeded after an error or
 timeout; say briefly that you could not update the interface instead. The navigate_to tool also
-performs and confirms the standard focus action for that view: Revenue on Dashboard, Traffic
-Overview on Analytics, and the member list on Team. After navigate_to returns confirmed, explain
-the focused content without calling a second tool. Never narrate a command or speak instructions
-such as "Navigate to the Analytics view" instead of calling the tool. Use highlight or scroll_to
-separately only when the user asks to focus an element on the view that is already open.
-Do not use interface tools for Goals, search, analytics tabs, or any other action. Always respond in
-English.
+performs and confirms the standard presentation actions for that view. After navigate_to returns
+confirmed, explain the focused content without calling a second tool. Use focus_target for a
+specific supported panel and search_team_member only for a requested person name. Search results
+must come from the confirmed tool result; never invent members. Never narrate a command or speak
+instructions such as "Navigate to the Analytics view" instead of calling the tool. Do not use
+interface tools for Goals, analytics tabs, or any undeclared action. Always respond in English.
 
 The guided-demo controller owns the tour sequence and its navigation. During a tour, answer the
 user's questions naturally without claiming that you advanced, paused, or completed the tour."""
@@ -299,8 +330,10 @@ async def run_bot(
     profile: LocalVoiceProfile | None = None,
 ) -> None:
     current_ui_state: dict | None = None
-    pending_ui_actions: dict[str, tuple[asyncio.Future, str, dict]] = {}
+    pending_ui_actions: dict[str, tuple[asyncio.Future, str, dict, int]] = {}
     worker: PipelineWorker | None = None
+    active_session_id: str | None = None
+    session_generation = 0
 
     if profile:
         profile.start_run(
@@ -373,24 +406,41 @@ async def run_bot(
                     code,
                 )
 
-        if worker is None or not UI_CATALOG.supports_action(current_ui_state, command, payload):
+        if (
+            worker is None
+            or active_session_id is None
+            or not UI_CATALOG.supports_action(current_ui_state, command, payload)
+        ):
             if profile:
                 profile.ui_action_started(action_id, None, command, payload)
             profile_result("error", "ui_state_unavailable")
             return {"status": "error", "code": "ui_state_unavailable"}
 
         command_id = uuid4().hex
+        command_generation = session_generation
+        ui_session_id = current_ui_state["uiSessionId"]
         confirmation = asyncio.get_running_loop().create_future()
-        pending_ui_actions[command_id] = (confirmation, command, payload)
+        pending_ui_actions[command_id] = (
+            confirmation,
+            command,
+            {**payload, "uiSessionId": ui_session_id},
+            command_generation,
+        )
         if profile:
             profile.ui_action_started(action_id, command_id, command, payload)
-        logger.opt(colors=True).info("<yellow>[UI]</yellow> Sending {}: {}", command, payload)
+        logger.opt(colors=True).info(
+            "<yellow>[UI]</yellow> Sending {} {}: {}", command, command_id, payload
+        )
 
         try:
             await worker.queue_frame(
                 RTVIUICommandFrame(
                     command=command,
-                    payload={"commandId": command_id, **payload},
+                    payload={
+                        "commandId": command_id,
+                        "uiSessionId": ui_session_id,
+                        **payload,
+                    },
                 )
             )
             result = await asyncio.wait_for(confirmation, timeout=UI_ACTION_TIMEOUT_SECS)
@@ -414,16 +464,27 @@ async def run_bot(
                 "code": result.get("code", "action_failed"),
             }
 
-        logger.opt(colors=True).info("<yellow>[UI]</yellow> {} confirmed", command)
+        logger.opt(colors=True).info(
+            "<yellow>[UI]</yellow> {} {} confirmed", command, command_id
+        )
         profile_result("confirmed")
         return {
             "status": "confirmed",
             "action": command,
-            **{key: value for key, value in result.items() if key not in {"commandId", "status"}},
+            **{
+                key: value
+                for key, value in result.items()
+                if key not in {"commandId", "uiSessionId", "status"}
+            },
         }
 
     context = LLMContext()
-    ui_actions = UIActionExecutor(UI_CATALOG, execute_ui_action, lambda: current_ui_state)
+    ui_actions = UIActionExecutor(
+        UI_CATALOG,
+        execute_ui_action,
+        lambda: current_ui_state,
+        lambda: session_generation,
+    )
 
     def record_resolution(resolution: str, details: dict) -> None:
         if profile:
@@ -454,7 +515,12 @@ async def run_bot(
         record_resolution,
         record_demo_control,
     )
-    ui_tools = ui_actions.build_tools(context, record_resolution, on_external_action)
+    ui_tools = ui_actions.build_tools(
+        context,
+        record_resolution,
+        on_external_action,
+        lambda: session_generation,
+    )
     ui_intent_gate = UIActionToolChoiceProcessor(
         context,
         UI_CATALOG,
@@ -464,6 +530,8 @@ async def run_bot(
         record_resolution,
         on_external_action,
         lambda: guided_demo_gate.user_turn_generation,
+        lambda: session_generation,
+        lambda: (current_ui_state or {}).get("currentPage"),
     )
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
@@ -546,23 +614,39 @@ async def run_bot(
     @worker.rtvi.event_handler("on_ui_message")
     async def on_ui_message(rtvi, message):
         nonlocal current_ui_state
+        if active_session_id is None:
+            return
         if message.type != "ui-event" or not isinstance(message.data.payload, dict):
             return
 
         payload = message.data.payload
+        message_generation = session_generation
         if message.data.event == "ui_state":
             current_page = payload.get("currentPage")
             revision = payload.get("revision")
-            if current_page not in {"home", *UI_CATALOG.view_ids} or not isinstance(revision, int):
+            ui_session_id = payload.get("uiSessionId")
+            if (
+                current_page not in {"home", *UI_CATALOG.view_ids}
+                or not isinstance(revision, int)
+                or not isinstance(ui_session_id, str)
+                or not ui_session_id
+            ):
                 logger.opt(colors=True).warning("<yellow>[UI]</yellow> Ignoring invalid state: {}", payload)
                 return
-            if current_ui_state is not None and revision <= current_ui_state.get("revision", -1):
+            if (
+                current_ui_state is not None
+                and ui_session_id == current_ui_state.get("uiSessionId")
+                and revision <= current_ui_state.get("revision", -1)
+            ):
                 logger.opt(colors=True).debug("<yellow>[UI]</yellow> Ignoring stale state revision {}", revision)
                 return
+            if current_ui_state is not None and ui_session_id != current_ui_state.get("uiSessionId"):
+                reject_pending_ui_actions(pending_ui_actions, "ui_session_replaced")
 
             visible_elements = payload.get("visibleElements", [])
             current_ui_state = {
                 "revision": revision,
+                "uiSessionId": ui_session_id,
                 "uiContractVersion": payload.get("uiContractVersion"),
                 "currentPage": current_page,
                 "selectedTab": payload.get("selectedTab"),
@@ -575,7 +659,7 @@ async def run_bot(
                 "supportedViews": payload.get("supportedViews", [])[:10]
                 if isinstance(payload.get("supportedViews"), list)
                 else [],
-                "supportedTargets": payload.get("supportedTargets", [])[:10]
+                "supportedTargets": payload.get("supportedTargets", [])[:50]
                 if isinstance(payload.get("supportedTargets"), list)
                 else [],
             }
@@ -586,17 +670,23 @@ async def run_bot(
                 )
             logger.opt(colors=True).debug("<yellow>[UI]</yellow> State updated: {}", current_ui_state)
             await update_ui_instruction()
+            if message_generation != session_generation:
+                return
             await demo_controller.set_ui_ready(current_ui_state["contractCompatible"])
         elif message.data.event == "ui_action_result":
             command_id = payload.get("commandId")
-            pending_action = pending_ui_actions.get(command_id)
-            if pending_action is None or pending_action[0].done():
+            pending_action = pending_ui_action_for_session(
+                pending_ui_actions,
+                command_id,
+                session_generation,
+            )
+            if pending_action is None:
                 logger.opt(colors=True).debug(
                     "<yellow>[UI]</yellow> Ignoring late or unknown confirmation: {}", command_id
                 )
                 return
 
-            confirmation, command, expected_payload = pending_action
+            confirmation, command, expected_payload, _ = pending_action
             if not UI_CATALOG.confirmation_matches(command, expected_payload, payload):
                 payload = {
                     "status": "error",
@@ -611,23 +701,54 @@ async def run_bot(
                     **(current_ui_state or {}),
                     "currentPage": payload["currentPage"],
                 }
-                await update_ui_instruction()
+            if not confirmation.done():
+                confirmation.set_result(payload)
             logger.opt(colors=True).debug(
                 "<yellow>[UI]</yellow> Confirmation received for {}: {}", command_id, payload
             )
-            confirmation.set_result(payload)
+            if payload.get("status") == "ok" and message_generation == session_generation:
+                await update_ui_instruction()
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        logger.opt(colors=True).info("<magenta>[SESSION]</magenta> Connected")
+        nonlocal active_session_id, current_ui_state, session_generation
+        session_generation += 1
+        active_session_id = uuid4().hex
+        current_ui_state = None
+        reject_pending_ui_actions(pending_ui_actions, "session_replaced")
+        context.set_messages([])
+        context.set_tools([])
+        context.set_tool_choice("auto")
+        ui_intent_gate.reset_session()
+        logger.opt(colors=True).info(
+            "<magenta>[SESSION]</magenta> Connected {} generation {}",
+            active_session_id,
+            session_generation,
+        )
         if profile:
             profile.start_session()
-        await demo_controller.connect(profile.session_id if profile else uuid4().hex)
+        await demo_controller.connect(active_session_id)
 
     @transport.event_handler("on_client_disconnected")
     async def on_client_disconnected(transport, client):
-        logger.opt(colors=True).info("<magenta>[SESSION]</magenta> Disconnected")
+        nonlocal active_session_id, current_ui_state, session_generation
+        disconnected_session = active_session_id
+        active_session_id = None
+        session_generation += 1
+        current_ui_state = None
+        rejected_actions = reject_pending_ui_actions(
+            pending_ui_actions, "client_disconnected"
+        )
+        context.set_messages([])
+        context.set_tools([])
+        context.set_tool_choice("auto")
         await demo_controller.disconnect()
+        logger.opt(colors=True).info(
+            "<magenta>[SESSION]</magenta> Disconnected {} generation {}; settled {} actions",
+            disconnected_session,
+            session_generation,
+            rejected_actions,
+        )
         if profile:
             profile.end_session("disconnected")
         await worker.cancel()
