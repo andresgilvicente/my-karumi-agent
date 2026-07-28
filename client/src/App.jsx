@@ -222,11 +222,11 @@ function Topbar({ title }) {
         <VoiceControls />
         <div className="profile-summary" aria-label="Current user">
           <span className="avatar avatar-dark" aria-hidden="true">
-            AM
+            AG
           </span>
           <span className="profile-copy">
-            <strong>Alex Morgan</strong>
-            <small>Product Lead</small>
+            <strong>Andrés Gil</strong>
+            <small>AI Engineer</small>
           </span>
         </div>
       </div>
@@ -517,7 +517,7 @@ function AnalyticsView() {
         eyebrow="Audience insights"
         title="Analytics"
         description="Understand how visitors discover and engage with the product."
-        aside="Jun 28 - Jul 27"
+        aside="Jun 28 - Jul 27, 2026"
         titleId="analytics-title"
       />
 
