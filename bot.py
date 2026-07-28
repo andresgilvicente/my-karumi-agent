@@ -1,7 +1,19 @@
 import time
+from collections import deque
 
+from loguru import logger
 from pipecat.audio.vad.silero import SileroVADAnalyzer
-from pipecat.frames.frames import LLMRunFrame, LLMTextFrame, TranscriptionFrame
+from pipecat.frames.frames import (
+    BotStoppedSpeakingFrame,
+    LLMRunFrame,
+    MetricsFrame,
+    TranscriptionFrame,
+    VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
+)
+from pipecat.metrics.metrics import ProcessingMetricsData, TTFAMetricsData
+from pipecat.observers.base_observer import BaseObserver, FramePushed
+from pipecat.observers.user_bot_latency_observer import UserBotLatencyObserver
 from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.aggregators.llm_context import LLMContext
@@ -9,7 +21,7 @@ from pipecat.processors.aggregators.llm_response_universal import (
     LLMContextAggregatorPair,
     LLMUserAggregatorParams,
 )
-from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
+from pipecat.processors.frame_processor import FrameDirection
 from pipecat.runner.types import RunnerArguments
 from pipecat.runner.utils import create_transport
 from pipecat.services.kokoro.tts import KokoroTTSService
@@ -17,18 +29,23 @@ from pipecat.services.ollama.llm import OLLamaLLMService
 from pipecat.services.whisper.stt import WhisperSTTService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
+from pipecat.turns.user_start import VADUserTurnStartStrategy
+from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
+from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.workers.runner import WorkerRunner
 
 # ---------------------------------------------------------------------------
 # Config — change these to swap models / voices without touching the pipeline.
 # ---------------------------------------------------------------------------
-STT_MODEL = "base"
+STT_MODEL = "base" # "tiny"
 STT_LANGUAGE = Language.EN
 
 LLM_MODEL = "qwen2.5:1.5b"
 
 TTS_VOICE = "af_heart"
 TTS_LANGUAGE = Language.EN
+
+USER_SPEECH_TIMEOUT_SECS = 1 # 0.6
 
 # ---------------------------------------------------------------------------
 # Agent personality
@@ -46,7 +63,10 @@ information.
 
 The interface-control tools are not connected yet. Do not claim to navigate or change the screen.
 If asked to do so, explain briefly that voice conversation is available and screen control is the
-next capability being connected. Always respond in English."""
+next capability being connected. Always respond in English.
+
+At the beginning of a session, introduce yourself as Karumi Agent, offer a brief interactive tour
+of Metric Master Suite, and invite the user to interrupt or ask questions."""
 
 # ---------------------------------------------------------------------------
 # Transport
@@ -60,28 +80,73 @@ TRANSPORT_PARAMS = {
 
 
 # ---------------------------------------------------------------------------
-# Latency logger — lightweight timing for STT → LLM first token.
+# Latency observer — supplements Pipecat's end-to-end latency observer with
+# transcription, TTFA, and total processing measurements from native metrics.
 # ---------------------------------------------------------------------------
-class LatencyLogger(FrameProcessor):
-    """Prints timing between transcription and first LLM token."""
+class VoiceMetricsObserver(BaseObserver):
+    """Log per-turn transcription and native service timing metrics."""
 
-    def __init__(self):
+    def __init__(self, *, stt_name: str, llm_name: str, tts_name: str):
         super().__init__()
-        self._stt_time: float | None = None
+        self._stt_name = stt_name
+        self._llm_name = llm_name
+        self._tts_name = tts_name
+        self._speech_end_time: float | None = None
+        self._tts_processing_total = 0.0
+        self._tts_ttfa_logged = False
+        self._processed_frames: set[int] = set()
+        self._frame_history: deque[int] = deque(maxlen=200)
 
-    async def process_frame(self, frame, direction):
-        await super().process_frame(frame, direction)
+    async def on_push_frame(self, data: FramePushed):
+        if (
+            data.direction != FrameDirection.DOWNSTREAM
+            or data.frame.id in self._processed_frames
+        ):
+            return
 
-        if isinstance(frame, TranscriptionFrame):
-            self._stt_time = time.monotonic()
-            print(f"[STT] '{frame.text}'")
+        self._processed_frames.add(data.frame.id)
+        self._frame_history.append(data.frame.id)
+        if len(self._processed_frames) > len(self._frame_history):
+            self._processed_frames = set(self._frame_history)
 
-        elif isinstance(frame, LLMTextFrame) and self._stt_time is not None:
-            elapsed = time.monotonic() - self._stt_time
-            print(f"[LLM] First token in {elapsed:.2f}s")
-            self._stt_time = None
+        frame = data.frame
+        if isinstance(frame, VADUserStartedSpeakingFrame):
+            self._speech_end_time = None
+            self._tts_processing_total = 0.0
+            self._tts_ttfa_logged = False
+        elif isinstance(frame, VADUserStoppedSpeakingFrame):
+            self._speech_end_time = frame.timestamp - frame.stop_secs
+        elif isinstance(frame, TranscriptionFrame):
+            logger.info(f"[STT] Transcription: {frame.text.strip()!r}")
+            if self._speech_end_time is not None:
+                latency = time.time() - self._speech_end_time
+                logger.info(f"[LATENCY] End of user speech -> transcription: {latency:.3f}s")
+        elif isinstance(frame, MetricsFrame):
+            self._handle_metrics(frame)
+        elif isinstance(frame, BotStoppedSpeakingFrame) and self._tts_processing_total > 0:
+            logger.info(
+                f"[LATENCY] TTS generation total across segments: "
+                f"{self._tts_processing_total:.3f}s"
+            )
+            self._speech_end_time = None
 
-        await self.push_frame(frame, direction)
+    def _handle_metrics(self, frame: MetricsFrame):
+        for metric in frame.data:
+            if isinstance(metric, ProcessingMetricsData):
+                if metric.processor == self._stt_name:
+                    logger.info(f"[LATENCY] STT processing: {metric.value:.3f}s")
+                elif metric.processor == self._llm_name:
+                    logger.info(f"[LATENCY] LLM total: {metric.value:.3f}s")
+                elif metric.processor == self._tts_name:
+                    self._tts_processing_total += metric.value
+                    logger.info(f"[LATENCY] TTS segment total: {metric.value:.3f}s")
+            elif (
+                isinstance(metric, TTFAMetricsData)
+                and metric.processor == self._tts_name
+                and not self._tts_ttfa_logged
+            ):
+                self._tts_ttfa_logged = True
+                logger.info(f"[LATENCY] TTS TTFA: {metric.ttfa:.3f}s")
 
 
 # ---------------------------------------------------------------------------
@@ -116,16 +181,44 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
     context = LLMContext()
     user_aggregator, assistant_aggregator = LLMContextAggregatorPair(
         context,
-        user_params=LLMUserAggregatorParams(vad_analyzer=SileroVADAnalyzer()),
+        user_params=LLMUserAggregatorParams(
+            vad_analyzer=SileroVADAnalyzer(),
+            user_turn_strategies=UserTurnStrategies(
+                start=[VADUserTurnStartStrategy()],
+                stop=[
+                    SpeechTimeoutUserTurnStopStrategy(
+                        user_speech_timeout=USER_SPEECH_TIMEOUT_SECS
+                    )
+                ],
+            ),
+        ),
     )
 
-    latency_logger = LatencyLogger()
+    latency_observer = UserBotLatencyObserver()
+    metrics_observer = VoiceMetricsObserver(
+        stt_name=stt.name,
+        llm_name=llm.name,
+        tts_name=tts.name,
+    )
+
+    @latency_observer.event_handler("on_first_bot_speech_latency")
+    async def on_first_bot_speech_latency(observer, latency):
+        logger.info(f"[LATENCY] Client connected -> first bot audio: {latency:.3f}s")
+
+    @latency_observer.event_handler("on_latency_measured")
+    async def on_latency_measured(observer, latency):
+        logger.info(f"[LATENCY] End of user speech -> first bot audio: {latency:.3f}s")
+
+    @latency_observer.event_handler("on_latency_breakdown")
+    async def on_latency_breakdown(observer, breakdown):
+        events = breakdown.chronological_events()
+        if events:
+            logger.info(f"[LATENCY] Breakdown: {' | '.join(events)}")
 
     pipeline = Pipeline(
         [
             transport.input(),
             stt,
-            latency_logger,
             user_aggregator,
             llm,
             tts,
@@ -141,20 +234,12 @@ async def run_bot(transport: BaseTransport, runner_args: RunnerArguments) -> Non
             enable_metrics=True,
             enable_usage_metrics=True,
         ),
+        observers=[latency_observer, metrics_observer],
         idle_timeout_secs=runner_args.pipeline_idle_timeout_secs,
     )
 
     @transport.event_handler("on_client_connected")
     async def on_client_connected(transport, client):
-        context.add_message(
-            {
-                "role": "system",
-                "content": (
-                    "Introduce yourself as Karumi Agent and offer a brief interactive tour of "
-                    "Metric Master Suite. Invite the user to interrupt or ask questions."
-                ),
-            }
-        )
         await worker.queue_frames([LLMRunFrame()])
 
     @transport.event_handler("on_client_disconnected")
