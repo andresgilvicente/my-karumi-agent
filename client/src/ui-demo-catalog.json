@@ -1,0 +1,85 @@
+{
+  "uiContractVersion": 1,
+  "commands": {
+    "navigate_to": {
+      "description": "Required for every request to show, open, or go to Dashboard, Analytics, or Team. This function performs the UI action; never describe the command in spoken text instead.",
+      "payloadKey": "view"
+    },
+    "highlight": {
+      "description": "Highlight a supported element on the currently visible view.",
+      "payloadKey": "target"
+    },
+    "scroll_to": {
+      "description": "Scroll to the Team member list when the Team view is visible.",
+      "payloadKey": "target"
+    }
+  },
+  "navigationPhrases": [
+    "show me",
+    "take me",
+    "bring me",
+    "go to",
+    "open",
+    "navigate",
+    "switch to",
+    "move to",
+    "visit",
+    "look at"
+  ],
+  "fallbackNavigationPhrases": ["show me", "take me", "go to", "open", "navigate"],
+  "focusPhrases": ["highlight", "focus", "emphasize"],
+  "scrollPhrases": ["scroll"],
+  "views": {
+    "dashboard": {
+      "hash": "#dashboard",
+      "elementId": "dashboard-title",
+      "aliases": ["dashboard", "revenue"],
+      "defaultAction": {
+        "command": "highlight",
+        "target": "total-revenue-card"
+      },
+      "successMessage": "The Dashboard is open, with Total Revenue highlighted."
+    },
+    "analytics": {
+      "hash": "#analytics",
+      "elementId": "analytics-title",
+      "aliases": ["analytics", "traffic"],
+      "defaultAction": {
+        "command": "highlight",
+        "target": "traffic-overview"
+      },
+      "successMessage": "Analytics is open, with Traffic Overview highlighted."
+    },
+    "team": {
+      "hash": "#team",
+      "elementId": "team-title",
+      "aliases": ["team", "member list", "members"],
+      "defaultAction": {
+        "command": "scroll_to",
+        "target": "team-member-list"
+      },
+      "successMessage": "The Team view is open, and I've scrolled to the member list."
+    }
+  },
+  "targets": {
+    "total-revenue-card": {
+      "command": "highlight",
+      "view": "dashboard",
+      "resolverAliases": ["dashboard", "revenue"],
+      "successMessage": "I've highlighted Total Revenue."
+    },
+    "traffic-overview": {
+      "command": "highlight",
+      "view": "analytics",
+      "resolverAliases": ["analytics", "traffic"],
+      "successMessage": "I've highlighted Traffic Overview."
+    },
+    "team-member-list": {
+      "command": "scroll_to",
+      "view": "team",
+      "resolverAliases": ["team", "member", "list"],
+      "successMessage": "I've scrolled to the Team member list."
+    }
+  },
+  "errorMessage": "I couldn't update the interface. Please try again."
+}

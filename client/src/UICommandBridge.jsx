@@ -5,36 +5,24 @@ import {
   useUIEventSender,
 } from "@pipecat-ai/client-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import catalog from "./ui-demo-catalog.json";
 
-const VIEW_TARGETS = {
-  dashboard: { route: "dashboard", elementId: "dashboard-title" },
-  analytics: { route: "analytics", elementId: "analytics-title" },
-  team: { route: "team", elementId: "team-title" },
-};
-
-const HIGHLIGHT_TARGETS = new Set(["total-revenue-card", "traffic-overview"]);
-const SCROLL_TARGETS = new Set(["team-member-list"]);
+const SUPPORTED_COMMANDS = Object.keys(catalog.commands);
+const SUPPORTED_VIEWS = Object.keys(catalog.views);
+const SUPPORTED_TARGETS = Object.keys(catalog.targets);
 
 function pageState(routeName) {
   const currentPage = routeName === "dashboard-goals" ? "dashboard" : routeName;
   const selectedTab = routeName === "dashboard" ? "overview" : routeName === "dashboard-goals" ? "goals" : null;
-  const visibleElements = {
-    dashboard: ["total-revenue-card"],
-    analytics: ["traffic-overview"],
-    team: ["team-member-list"],
-  }[currentPage] ?? [];
+  const visibleElements = SUPPORTED_TARGETS.filter((target) => catalog.targets[target].view === currentPage);
 
   return {
     currentPage,
     selectedTab,
     visibleElements,
     availableActions: [
-      "navigate_to:dashboard",
-      "navigate_to:analytics",
-      "navigate_to:team",
-      ...visibleElements.map((target) =>
-        target === "team-member-list" ? `scroll_to:${target}` : `highlight:${target}`,
-      ),
+      ...SUPPORTED_VIEWS.map((view) => `navigate_to:${view}`),
+      ...visibleElements.map((target) => `${catalog.targets[target].command}:${target}`),
     ],
   };
 }
@@ -65,8 +53,8 @@ function UICommandBridge({ routeName }) {
   const processedCommandsRef = useRef(new Map());
 
   const sendResult = useCallback(
-    (commandId, result) => {
-      const payload = { commandId, ...result };
+    (command, commandId, result) => {
+      const payload = { command, commandId, ...result };
       processedCommandsRef.current.set(commandId, payload);
       sendUIEvent("ui_action_result", payload);
     },
@@ -74,7 +62,7 @@ function UICommandBridge({ routeName }) {
   );
 
   const runCommand = useCallback(
-    async (payload, execute) => {
+    async (command, payload, execute) => {
       const commandId = payload?.commandId;
       if (typeof commandId !== "string" || !commandId) return;
 
@@ -86,9 +74,9 @@ function UICommandBridge({ routeName }) {
 
       try {
         const result = await execute(payload);
-        sendResult(commandId, { status: "ok", ...result });
+        sendResult(command, commandId, { status: "ok", ...result });
       } catch (error) {
-        sendResult(commandId, {
+        sendResult(command, commandId, {
           status: "error",
           code: error?.message || "action_failed",
         });
@@ -99,41 +87,46 @@ function UICommandBridge({ routeName }) {
 
   const handleNavigate = useCallback(
     (payload) =>
-      runCommand(payload, async ({ view }) => {
-        const destination = VIEW_TARGETS[view];
+      runCommand("navigate_to", payload, async ({ view }) => {
+        const destination = catalog.views[view];
         if (!destination) throw new Error("unsupported_view");
-        window.location.hash = destination.route;
+        window.location.hash = destination.hash;
         await waitForElement(destination.elementId);
         return { currentPage: view };
       }),
     [runCommand],
   );
 
-  const handleHighlight = useCallback(
-    (payload) =>
-      runCommand(payload, async ({ target }) => {
-        if (!HIGHLIGHT_TARGETS.has(target)) throw new Error("unsupported_target");
+  const handleTargetAction = useCallback(
+    (command, payload) =>
+      runCommand(command, payload, async ({ target }) => {
+        const targetDefinition = catalog.targets[target];
+        if (!targetDefinition || targetDefinition.command !== command) {
+          throw new Error("unsupported_target");
+        }
         const element = await waitForElement(target);
-        element.classList.remove("voice-highlight");
-        void element.offsetWidth;
-        element.classList.add("voice-highlight");
-        window.setTimeout(() => element.classList.remove("voice-highlight"), 2200);
+        if (command === "highlight") {
+          element.classList.remove("voice-highlight");
+          void element.offsetWidth;
+          element.classList.add("voice-highlight");
+          window.setTimeout(() => element.classList.remove("voice-highlight"), 2200);
+        } else {
+          const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          element.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
+          await new Promise((resolve) => window.setTimeout(resolve, reduceMotion ? 0 : 500));
+        }
         return { currentPage: pageState(routeName).currentPage, target };
       }),
     [routeName, runCommand],
   );
 
+  const handleHighlight = useCallback(
+    (payload) => handleTargetAction("highlight", payload),
+    [handleTargetAction],
+  );
   const handleScroll = useCallback(
-    (payload) =>
-      runCommand(payload, async ({ target }) => {
-        if (!SCROLL_TARGETS.has(target)) throw new Error("unsupported_target");
-        const element = await waitForElement(target);
-        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        element.scrollIntoView({ behavior: reduceMotion ? "auto" : "smooth", block: "center" });
-        await new Promise((resolve) => window.setTimeout(resolve, reduceMotion ? 0 : 500));
-        return { currentPage: pageState(routeName).currentPage, target };
-      }),
-    [routeName, runCommand],
+    (payload) => handleTargetAction("scroll_to", payload),
+    [handleTargetAction],
   );
 
   useUICommandHandler("navigate_to", handleNavigate);
@@ -156,7 +149,11 @@ function UICommandBridge({ routeName }) {
     if (!ready) return;
     revisionRef.current += 1;
     sendUIEvent("ui_state", {
+      uiContractVersion: catalog.uiContractVersion,
       revision: revisionRef.current,
+      supportedCommands: SUPPORTED_COMMANDS,
+      supportedViews: SUPPORTED_VIEWS,
+      supportedTargets: SUPPORTED_TARGETS,
       ...pageState(routeName),
     });
   }, [ready, routeName, sendUIEvent]);

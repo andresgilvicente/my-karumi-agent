@@ -7,14 +7,16 @@ Updated: 2026-07-28
 - The local MVP now has one connected product-demo flow: the React Metric Master Suite interface connects directly to the Pipecat voice worker over SmallWebRTC and RTVI.
 - Voice-turn stabilization remains on Whisper `base` with a 1.0-second speech timeout.
 - The first UI-control phase is complete. Supported voice requests can navigate to Dashboard, Analytics, or Team and then confirm the destination's standard highlight or scroll action.
+- Semantic UI control is now centralized in a versioned catalog shared by React and Python; the backend validates advertised capabilities per action and ignores stale UI state.
 - Repository setup, architecture, command-contract, and validation guidance reflect the connected implementation.
 
 ## Implemented Components
 
 - Voice: WebRTC input/output, Whisper transcription, VAD start detection, speech-timeout turn completion, Ollama responses, Kokoro speech, automatic introduction, conversation context, and native per-stage/end-to-end latency observers.
 - Frontend: Home, Dashboard Overview/Goals, Analytics, and Team views with hash navigation, responsive CSS, keyboard-operated dashboard tabs, in-memory team filtering, voice connection/microphone controls, and voice activity status.
-- UI bridge: current route and capability publication through `ui_state`; idempotent `navigate_to`, `highlight`, and `scroll_to` handlers; and `ui_action_result` acknowledgements correlated by `commandId`.
-- Backend orchestration: dynamic React state in the LLM instruction, closed tool schemas, five-second action timeouts, confirmation-aware responses, and deterministic dispatch for explicit allowlisted requests.
+- UI bridge: catalog-derived route and capability publication through `ui_state`; idempotent `navigate_to`, `highlight`, and `scroll_to` handlers; and `ui_action_result` acknowledgements correlated by `commandId`.
+- Backend orchestration: dynamic React state in the LLM instruction, catalog-derived tool schemas, five-second action timeouts, confirmation-aware responses, and deterministic dispatch for explicit allowlisted requests.
+- Context safety: deterministic turns commit the user request and confirmed assistant response before audio synthesis, so an interruption does not erase the confirmed action from later LLM context.
 - Navigation compounds the expected focus action: Dashboard highlights Total Revenue, Analytics highlights Traffic Overview, and Team scrolls to the member list.
 
 ## Current Constraints
@@ -26,6 +28,7 @@ Updated: 2026-07-28
 - Whisper `base` still misses product vocabulary such as `Pipecat` and `Metric Master Suite`; custom vocabulary support remains deferred.
 - Kokoro response generation remains the main source of variable conversational latency, especially for longer answers.
 - End-to-end voice and UI behavior depends on local models, browser media, and system services and remains a manual verification path.
+- The catalog intentionally describes only the supported semantic surface, not all React routes or DOM structure.
 
 ## Last Verified
 
@@ -34,10 +37,13 @@ Updated: 2026-07-28
 - On 2026-07-28, the Pipecat runner reported ready and the React app connected through SmallWebRTC, published its initial `ui_state`, and completed normal voice exchanges.
 - On 2026-07-28, manual browser tests passed for Team navigation plus member-list scroll, Dashboard navigation plus Total Revenue highlight, and Analytics navigation plus Traffic Overview highlight.
 - Backend logs confirmed a matching `status: ok` result for every navigation and focus `commandId` before the agent reported success.
+- On 2026-07-28, the catalog refactor passed ten standard-library UI-control tests, Python compilation/import, and a Linux Node 24 production build. Manual regression checks passed normal conversation, all three navigation/focus flows, a split navigation request, and sidebar navigation before a voice command.
 
 ## Relevant Files
 
 - `bot.py`: voice pipeline, semantic intent resolution, function schemas, UI state, RTVI commands, acknowledgements, and failure handling.
+- `client/src/ui-demo-catalog.json`: canonical semantic UI contract used by both runtime surfaces.
+- `ui_control/`: catalog validation, resolver, action execution, function fallback, and deterministic context handling.
 - `client/src/voiceClient.js`: Pipecat client, SmallWebRTC transport, and configurable runner endpoint.
 - `client/src/VoiceControls.jsx`: connect/disconnect, mute/unmute, and activity/error state.
 - `client/src/UICommandBridge.jsx`: React state publication, command allowlists, idempotency, and results.
@@ -51,4 +57,4 @@ Updated: 2026-07-28
 1. Treat the current three-route vertical demo as the baseline and avoid expanding the command surface without a concrete demo need.
 2. If broader phrasing becomes necessary, replace or augment the compact semantic resolver without weakening the command allowlists or confirmation contract.
 3. Profile conversational latency separately from deterministic UI actions; defer model or TTS changes unless measured behavior blocks the demo.
-4. Add focused automated coverage only when a test runner is introduced or the command resolver grows beyond its current small scope.
+4. Keep the standard-library semantic UI tests current whenever the catalog changes; introduce broader test infrastructure only when the surface grows beyond this small contract.

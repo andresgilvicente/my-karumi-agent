@@ -10,6 +10,8 @@
 ## Relevant Layout
 
 - `bot.py`: runtime configuration, system instruction, turn handling, metrics observers, Pipecat pipeline, connection handlers, and runner entrypoint.
+- `client/src/ui-demo-catalog.json`: shared, versioned contract for the allowlisted semantic UI surface.
+- `ui_control/catalog.py`, `ui_control/intents.py`, and `ui_control/processor.py`: catalog loading/validation, deterministic intent resolution, command execution, function schemas, and context-safe deterministic responses.
 - `client/src/App.jsx`: all frontend views, state, interactions, and route definitions.
 - `client/src/UICommandBridge.jsx`: RTVI UI state publication, semantic command handlers, idempotent command results, highlights, and scrolling.
 - `client/src/VoiceControls.jsx` and `client/src/voiceClient.js`: WebRTC connection, microphone controls, voice activity status, and the configurable runner endpoint.
@@ -21,9 +23,10 @@
 - The pipeline order is `transport.input()` -> Whisper STT -> UI intent/tool-choice processor -> user context aggregator -> Ollama LLM -> Kokoro TTS -> `transport.output()` -> assistant context aggregator. `UserBotLatencyObserver` and `VoiceMetricsObserver` observe the worker without being pipeline processors.
 - Current settings are Whisper `base` on CPU with `int8`, Ollama `qwen2.5:1.5b`, Kokoro voice `af_heart`, English for STT, TTS, and responses, and a 1.0-second speech timeout for ending a user turn. Change these through the constants and `SYSTEM_INSTRUCTION` near the top of `bot.py`.
 - The default architecture is fully local and requires no `.env` or API keys. A model-backed run still needs the local runtime prerequisites documented in `README.md`, including Ollama, the configured model, and `espeak-ng`.
-- React publishes `ui_state`; backend commands use `RTVIUICommandFrame` with a unique `commandId`, wait up to five seconds for `ui_action_result`, and only treat `status: ok` as confirmation. Keep this acknowledgement requirement for every new UI action.
+- React publishes `ui_state` with `uiContractVersion`, supported commands/views/targets, and a monotonic revision. The backend owns authorization through the shared catalog, ignores stale revisions, allows extra frontend capabilities, and requires every action's capabilities before dispatch.
+- Backend commands use `RTVIUICommandFrame` with a unique `commandId`, wait up to five seconds for `ui_action_result`, and only treat a matching `status: ok`, command, view, and target as confirmation. Keep this acknowledgement requirement for every new UI action.
 - UI execution is allowlisted: navigation to Dashboard/Analytics/Team, highlights for Total Revenue/Traffic Overview, and scrolling to the Team member list. Navigation also performs the standard focus action for its destination. Goals, search, analytics tabs, coordinates, and generic screen control remain unsupported.
-- Explicit supported requests are dispatched deterministically before Ollama because `qwen2.5:1.5b` can ignore required tool calls. Function tools remain a fallback, and Ollama continues to handle normal conversation.
+- Explicit supported requests are dispatched deterministically before Ollama because `qwen2.5:1.5b` can ignore required tool calls. Function tools remain a limited fallback, and Ollama continues to handle normal conversation. Logs identify `deterministic`, `function_call`, and `conversation` resolution paths.
 
 ## Development And Validation
 
@@ -31,7 +34,7 @@
 - `.nvmrc` selects Node 24 while `client/package.json` accepts Node >=22.12. Use npm inside `client/`: `npm ci` for installation, `npm run dev` for development, `npm run build` for a production build, and `npm run preview` to serve that build.
 - Under WSL, load Linux nvm with `source "$HOME/.nvm/nvm.sh"`, run `nvm use`, and confirm `command -v node` and `command -v npm` resolve under `/home/...`, not `/mnt/c/...`. Windows npm fails against this UNC workspace path.
 - Pipecat normally exposes its test client at `http://localhost:7860/client` and status at `/status`; Vite normally uses `http://localhost:5173`. Treat the URLs printed by the running tools as authoritative rather than assuming those ports are free.
-- No test runner, linter, formatter, typechecker, pre-commit hook, task runner, or CI workflow is configured. Do not invent commands such as `pytest`, `npm test`, or `npm run lint`.
+- The semantic UI suite uses Python's standard-library `unittest`: run `uv run python -m unittest discover -s tests`. No linter, formatter, typechecker, pre-commit hook, task runner, frontend test runner, or CI workflow is configured. Do not invent commands such as `pytest`, `npm test`, or `npm run lint`.
 - For backend-only edits, first run the import-independent syntax check `uv run python -m py_compile bot.py`. Run the full model-backed voice flow only when the change warrants its heavier local prerequisites.
 - For frontend edits, run `npm run build` under Linux Node inside `client/`, then manually exercise affected routes and interactions using the `Validate Frontend` checklist in `README.md`.
 - Voice and UI end-to-end verification is manual in Chrome through the React app. Click `Connect voice`, verify normal conversation, then exercise Dashboard, Analytics, and Team commands. A successful action should produce `[STT]`, `[UI] Deterministic intent`, command confirmation, deterministic result, and `[LATENCY]` logs. Pipecat's test client remains useful for voice-only isolation.
