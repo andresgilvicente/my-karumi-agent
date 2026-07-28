@@ -35,7 +35,7 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
         }
 
     def test_catalog_preserves_the_current_contract(self):
-        self.assertEqual(self.catalog.contract_version, 3)
+        self.assertEqual(self.catalog.contract_version, 4)
         self.assertEqual(self.catalog.view_ids, ("dashboard", "analytics", "team"))
         self.assertEqual(
             set(self.catalog.target_ids),
@@ -66,6 +66,8 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
                 }
             )
         )
+        self.assertIn("clearSearchPhrases", self.catalog.data)
+        self.assertGreater(len(self.catalog.data["clearSearchPhrases"]), 0)
 
     def test_catalog_rejects_missing_required_capabilities(self):
         state = self.compatible_state()
@@ -517,6 +519,66 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
                     resolve_ui_intent(text, self.catalog),
                     ("search_team_member", {"query": query}),
                 )
+
+    def test_team_clear_search_phrases(self):
+        for text in self.catalog.data["clearSearchPhrases"]:
+            with self.subTest(text=text):
+                self.assertEqual(
+                    resolve_ui_intent(text, self.catalog),
+                    ("clear_team_search", {}),
+                )
+
+    def test_team_clear_search_with_prefixes(self):
+        cases = (
+            "can you clear the search",
+            "could you clear search",
+            "please clear filter",
+            "could you clear the filter",
+            "can you reset search",
+            "please show all members",
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                self.assertEqual(
+                    resolve_ui_intent(text, self.catalog),
+                    ("clear_team_search", {}),
+                )
+
+    async def test_team_clear_search_execution(self):
+        calls = []
+
+        async def send_command(command, payload):
+            calls.append((command, payload))
+            return {"status": "confirmed"}
+
+        executor = UIActionExecutor(
+            self.catalog, send_command, lambda: self.compatible_state("team", ["team-member-list"])
+        )
+        result = await executor.execute("clear_team_search", {})
+        self.assertEqual(result["status"], "confirmed")
+        self.assertEqual(result["action"], "clear_team_search")
+        self.assertEqual(calls, [("clear_team_search", {})])
+
+    async def test_team_clear_search_navigates_to_team(self):
+        calls = []
+
+        async def send_command(command, payload):
+            calls.append((command, payload))
+            if command == "navigate_to":
+                return {"status": "confirmed", "currentPage": "team"}
+            return {"status": "confirmed"}
+
+        executor = UIActionExecutor(self.catalog, send_command, lambda: self.compatible_state())
+        result = await executor.execute("clear_team_search", {})
+        self.assertEqual(result["status"], "confirmed")
+        self.assertEqual(result["action"], "clear_team_search")
+        self.assertEqual(
+            calls,
+            [
+                ("navigate_to", {"view": "team"}),
+                ("clear_team_search", {}),
+            ],
+        )
 
     async def test_deterministic_ui_intent_closes_the_consumed_user_turn(self):
         context = LLMContext()

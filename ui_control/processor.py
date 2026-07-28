@@ -73,6 +73,8 @@ class UIActionExecutor:
             return await self._focus_target(payload.get("target"), expected_generation)
         if command == "search_team_member":
             return await self._search_team_member(payload.get("query"), expected_generation)
+        if command == "clear_team_search":
+            return await self._clear_team_search(expected_generation)
         return {"status": "error", "code": "unsupported_action"}
 
     async def _navigate(self, view: str | None, expected_generation: int | None) -> dict:
@@ -210,6 +212,28 @@ class UIActionExecutor:
             **{key: search[key] for key in ("query", "matchCount", "matchedNames")},
         }
 
+    async def _clear_team_search(self, expected_generation: int | None) -> dict:
+        current_ui_state = self._get_ui_state()
+        navigation = None
+        if current_ui_state is None or current_ui_state.get("currentPage") != "team":
+            navigation = await self._navigate_only("team", expected_generation)
+            if navigation.get("status") != "confirmed":
+                return navigation
+
+        clear_result = await self._send("clear_team_search", {}, expected_generation)
+        if clear_result.get("status") != "confirmed":
+            return {
+                **clear_result,
+                "view": "team",
+                "screenConfirmed": navigation is not None,
+            }
+        return {
+            "status": "confirmed",
+            "action": "clear_team_search",
+            "view": "team",
+            "navigation": navigation,
+        }
+
     def response_for(self, command: str, payload: dict, result: dict) -> str:
         if result.get("status") != "confirmed":
             return self._catalog.data["errorMessage"]
@@ -223,6 +247,8 @@ class UIActionExecutor:
             if count == 1:
                 return f"I found {names} and highlighted the result in Team."
             return f"I found {count} matching Team members: {names}."
+        if command == "clear_team_search":
+            return "I've cleared the team search and centered the full member list."
         target = self._catalog.targets[payload["target"]]
         if command == "scroll_to":
             return f"I've centered {target['label']}."
@@ -316,6 +342,18 @@ class UIActionExecutor:
                 await on_action_result("search_team_member", payload, result)
             await finish_tool_call(params, result)
 
+        async def handle_clear_search(params: FunctionCallParams) -> None:
+            logger.opt(colors=True).debug("<yellow>[UI]</yellow> Resolution path: function_call")
+            if on_resolution:
+                on_resolution("function_call", {"command": "clear_team_search"})
+            session_generation = get_session_generation() if get_session_generation else None
+            result = await self.execute("clear_team_search", {})
+            if get_session_generation and session_generation != get_session_generation():
+                return
+            if on_action_result:
+                await on_action_result("clear_team_search", {}, result)
+            await finish_tool_call(params, result)
+
         return {
             "navigate_to": FunctionSchema(
                 name="navigate_to",
@@ -377,6 +415,13 @@ class UIActionExecutor:
                 },
                 required=["query"],
                 handler=handle_team_search,
+            ),
+            "clear_team_search": FunctionSchema(
+                name="clear_team_search",
+                description=self._catalog.commands["clear_team_search"]["description"],
+                properties={},
+                required=[],
+                handler=handle_clear_search,
             ),
         }
 

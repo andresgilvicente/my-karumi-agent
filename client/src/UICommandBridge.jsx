@@ -298,6 +298,19 @@ function UICommandBridge({
     [filterTeamMembers, runCommand, setTeamQuery, teamMembers],
   );
 
+  const handleClearSearch = useCallback(
+    (payload) =>
+      runCommand("clear_team_search", payload, async () => {
+        const input = await waitForElement("team-search");
+        setTeamQuery("");
+        await waitForCondition(() => input.value === "");
+        const list = await waitForElement("team-member-list");
+        await centerElement(list);
+        return { currentPage: "team", cleared: true };
+      }),
+    [runCommand, setTeamQuery],
+  );
+
   const handleHighlight = useCallback(
     (payload) => handleTargetAction("highlight", payload),
     [handleTargetAction],
@@ -311,6 +324,7 @@ function UICommandBridge({
   useUICommandHandler("highlight", handleHighlight);
   useUICommandHandler("scroll_to", handleScroll);
   useUICommandHandler("search_team_member", handleTeamSearch);
+  useUICommandHandler("clear_team_search", handleClearSearch);
 
   useRTVIClientEvent(
     RTVIEvent.BotReady,

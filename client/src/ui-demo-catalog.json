@@ -1,5 +1,5 @@
 {
-  "uiContractVersion": 3,
+  "uiContractVersion": 4,
   "commands": {
     "navigate_to": {
       "description": "Open a supported product view and run its confirmed presentation actions.",
@@ -16,6 +16,10 @@
     "search_team_member": {
       "description": "Search Team members by name and return only the matches confirmed by React.",
       "payloadKey": "query",
+      "view": "team"
+    },
+    "clear_team_search": {
+      "description": "Clear the Team member search filter and show all members.",
       "view": "team"
     },
     "focus_target": {
@@ -70,6 +74,18 @@
     "sources",
     "traffic",
     "users"
+  ],
+  "clearSearchPhrases": [
+    "clear search",
+    "clear the search",
+    "clear filter",
+    "clear the filter",
+    "clear team search",
+    "reset search",
+    "show all members",
+    "show all results",
+    "show the whole team",
+    "show everyone"
   ],
   "views": {
     "dashboard": {

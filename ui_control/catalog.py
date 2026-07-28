@@ -149,12 +149,9 @@ def validate_catalog(data: dict) -> None:
         raise ValueError("catalog must define commands, views, and targets")
 
     for command, definition in commands.items():
-        if not isinstance(definition, dict) or definition.get("payloadKey") not in {
-            "view",
-            "target",
-            "query",
-        }:
-            raise ValueError(f"command {command} must define a supported payloadKey")
+        payload_key = definition.get("payloadKey")
+        if payload_key is not None and payload_key not in {"view", "target", "query"}:
+            raise ValueError(f"command {command} has an unsupported payloadKey")
         if definition.get("clientCommand", True) not in {True, False}:
             raise ValueError(f"command {command} has an invalid clientCommand value")
         if definition.get("payloadKey") == "query" and definition.get("view") not in views:

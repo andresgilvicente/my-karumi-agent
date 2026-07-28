@@ -126,6 +126,14 @@ def _team_search_query(text: str, catalog: UIControlCatalog) -> str | None:
     return None
 
 
+def _team_clear_search(text: str, catalog: UIControlCatalog) -> bool:
+    for prefix in ("can you ", "could you ", "please "):
+        if text.startswith(prefix):
+            text = text[len(prefix) :]
+            break
+    return text in catalog.data.get("clearSearchPhrases", ())
+
+
 def resolve_ui_intent(
     text: str,
     catalog: UIControlCatalog,
@@ -135,6 +143,9 @@ def resolve_ui_intent(
     """Resolve only explicit, allowlisted product actions."""
     current = _normalize(text)
     previous = _normalize(previous_text)
+
+    if _team_clear_search(current, catalog):
+        return "clear_team_search", {}
 
     search_query = _team_search_query(current, catalog)
     if search_query:
