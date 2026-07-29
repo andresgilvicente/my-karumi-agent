@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/karumi-agent-cover.png" alt="Karumi Agent cover" width="100%">
+</p>
+
 # Karumi Agent
 
 ## 1. Introduction
