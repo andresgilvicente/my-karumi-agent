@@ -27,8 +27,6 @@ Explicit UI requests and guided-demo controls are resolved before Qwen. Normal p
 
 ## 4. Requirements
 
-Automated checks and local service probes were run on Ubuntu under WSL2 on x86-64. Current Chrome voice/UI acceptance is pending, so no platform has current end-to-end browser acceptance for the final worktree.
-
 Required:
 
 - Python 3.12, selected by `.python-version` and managed through `uv`.
@@ -243,8 +241,6 @@ Supported examples:
 - `Focus on Traffic Sources.`
 - `Take me to the team member list.`
 
-Use `Dashboard Conversion Rate` or `Analytics Conversion Rate` when the intended view is not already visible. An unqualified Conversion Rate is deliberately ambiguous from Home or Team.
-
 ### Team member search
 
 Voice search uses the real Team filter. React filters the current in-memory member records and returns structured names and counts. The spoken response is built from that result; Qwen does not invent people.
@@ -261,10 +257,6 @@ Other exact search forms include `Find a team member called Alex.` and `Does som
 ### Live conversation and interruptions
 
 Normal product questions go to Qwen. The user can interrupt speech, ask a question during the tour, and continue afterward. The model is intentionally given a concise product context; it is not a general source of unlimited Metric Master Suite knowledge and unsupported phrasing is not guaranteed to become an action.
-
-### Reconnection
-
-The implementation reuses one Pipecat client, settles disconnect operations, rotates the frontend UI session ID, and rejects results from old backend generations. Repeated same-tab reconnect acceptance remains a manual delivery check; see `PROJECT_STATE.md` and `docs/FINAL_CHECKLIST.md` for the current validation status.
 
 ### Capability examples
 
@@ -294,12 +286,6 @@ The implementation reuses one Pipecat client, settles disconnect operations, rot
 7. Say `Restart the demo.`; after Dashboard returns, say `Stop the demo.`
 8. Click `Disconnect`, reconnect in the same tab, and confirm that a fresh offer begins. Say `Not now.` to close it.
 
-Complete `docs/FINAL_CHECKLIST.md` before recording or presenting this full path, especially the reconnect and Team-clear cases.
-
-### About 90 seconds
-
-Connect, remain silent until Dashboard starts, say `Pause the demo.`, then `Show me Traffic Overview.`, `Resume the demo.`, `Search for Olivia.`, `Clear the search.`, and `Continue.` See `docs/DEMO_SCRIPT.md` for presenter timing and recovery cues.
-
 ## 10. Environment Variables
 
 No environment variable is required for the default local run.
@@ -308,11 +294,7 @@ No environment variable is required for the default local run.
 |---|---|---|---|
 | `VITE_PIPECAT_WEBRTC_URL` | No | `http://localhost:7860/api/offer` | Alternative SmallWebRTC offer endpoint for the frontend |
 | `KARUMI_DEBUG_LOGS` | No | Disabled | Enable detailed application logs when set to `true` |
-| `KARUMI_PROFILE` | No | Disabled | Enable local JSONL profiling when set to `1` |
-| `KARUMI_PROFILE_PATH` | No | Generated file under `profiles/` | Override the profiling output path |
-| `KARUMI_PROFILE_CASE` | No | Empty | Attach a corpus case ID to profiling records |
 
-`VITE_*` values are public frontend configuration. Set `VITE_PIPECAT_WEBRTC_URL` in the shell that runs Vite or in an environment file under `client/`.
 
 ## 11. Validation Commands
 
@@ -335,18 +317,6 @@ npm ci
 npm run build
 ```
 
-Manual smoke checklist:
-
-- Connect and hear the introduction.
-- Complete the autonomous tour.
-- Interrupt with a normal question.
-- Test navigation and target focus.
-- Search and clear Team.
-- Pause and resume the tour.
-- Disconnect and reconnect in the same tab.
-
-Use `docs/FINAL_CHECKLIST.md` for the complete acceptance matrix.
-
 ## 12. Essential Troubleshooting
 
 | Symptom | Likely cause | Action |
@@ -367,6 +337,4 @@ Use `docs/FINAL_CHECKLIST.md` for the complete acceptance matrix.
 - [`PROJECT_STATE.md`](PROJECT_STATE.md): current verified state, warnings, limitations, and pending manual checks.
 - [`AGENTS.md`](AGENTS.md): architecture invariants and safe development instructions.
 - [`docs/DEMO_SCRIPT.md`](docs/DEMO_SCRIPT.md): the presenter-facing three-to-five-minute and short demo flows.
-- [`docs/FINAL_CHECKLIST.md`](docs/FINAL_CHECKLIST.md): complete delivery and browser acceptance validation.
-- [`docs/guided-demo.md`](docs/guided-demo.md): detailed guided-controller behaviour and timing.
-- [`docs/profiling-corpus.md`](docs/profiling-corpus.md): latency metrics, fixed corpus, and profiling protocol.
+

@@ -1,27 +1,6 @@
 # Presenter Demo Script
 
-This runbook is for a live Metric Master Suite presentation. It is not an acceptance record. The
-current final Chrome rehearsal is **PENDING**. Complete every required item in
-[`FINAL_CHECKLIST.md`](FINAL_CHECKLIST.md) and record a final `PASS` before recording.
-
-## Preflight
-
-1. Start Ollama and confirm that the configured `qwen2.5:1.5b` model is available.
-2. From the repository root, start the voice worker with `uv run bot.py -t webrtc`.
-3. From `client/`, select the repository Node version with `nvm use` and start Vite with
-   `npm run dev`.
-4. Use the URLs printed by the running services. The defaults are the React app at
-   `http://localhost:5173` and the Pipecat runner at `http://localhost:7860`.
-5. Open the React app in current Chrome at `#home`, grant microphone access, and leave the browser
-   zoom at a readable level. Close or silence applications that may use the microphone or play
-   notifications.
-6. Keep the backend log visible to the operator. A UI result is successful only after the matching
-   command confirmation appears; do not narrate visual success before confirmation.
-7. Speak only the quoted user phrases while the microphone is live. Wait for the agent to finish
-   speaking before the next phrase unless the script explicitly calls for an interruption.
-8. Before recording, complete one warm-up connection. An uncached Whisper or Kokoro download can
-   exceed the frontend's 20-second readiness window; let loading finish, disconnect, and begin the
-   recorded run with a fresh connection.
+This runbook is for a live Metric Master Suite presentation. 
 
 ## Main Flow: 3-5 Minutes
 
@@ -115,4 +94,4 @@ control.
 | The interface does not confirm an action | Let the agent report the failure. Do not claim success. Check the backend for an error or five-second timeout, restore the connection, and say `Restart the demo`. |
 | The wrong view is open during the tour | Use one exact direct navigation phrase, wait for confirmation, then say `Resume the demo` or `Continue` as appropriate. |
 | The agent is interrupted by unintended room speech | Stop speaking and let the turn settle. If the tour position is unclear, say `Pause the demo`, then use `Restart the demo` for a clean reset. |
-| The connection drops | Wait until the control returns to `disconnected`, reconnect, and treat the replacement connection as a new session with a fresh offer. |
+| The connection drops | Wait until the control returns to `disconnected`, reconnect, and treat the replacement connection as a new session with a fresh offer. You may need to reload the page.
