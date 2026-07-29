@@ -92,13 +92,31 @@ class GuidedDemoTestCase(unittest.IsolatedAsyncioTestCase):
         cases = {
             "Start the demo.": "start_demo",
             "Let's start the demo.": "start_demo",
+            "Continue.": "continue_demo",
             "Go on.": "continue_demo",
+            "Pause the demo.": "pause_demo",
             "Hold on.": "pause_demo",
+            "Resume the demo.": "resume_demo",
             "Continue the tour.": "resume_demo",
+            "Stop the demo.": "stop_demo",
             "Cancel the demo.": "stop_demo",
+            "Restart the demo.": "restart_demo",
             "Start the tour again.": "restart_demo",
             "Restart demo.": "restart_demo",
             "Tell me about the product.": None,
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(resolve_demo_intent(text, self.definition), expected)
+
+    def test_documented_demo_controls_match_the_closed_resolver(self):
+        cases = {
+            "Pause the demo.": "pause_demo",
+            "Resume the demo.": "resume_demo",
+            "Continue.": "continue_demo",
+            "Stop the demo.": "stop_demo",
+            "Restart the demo.": "restart_demo",
+            "Not now.": "stop_demo",
         }
         for text, expected in cases.items():
             with self.subTest(text=text):
@@ -341,6 +359,16 @@ class GuidedDemoTestCase(unittest.IsolatedAsyncioTestCase):
         await self.controller.on_external_action(
             "search_team_member",
             {"query": "Olivia"},
+            {"status": "confirmed", "view": "team"},
+        )
+        self.assertEqual(self.controller.last_confirmed_step, "team")
+        self.assertEqual(self.controller.next_step_index, 3)
+
+    async def test_clear_search_synchronizes_the_tour_with_team(self):
+        await self.start_explicit_demo()
+        await self.controller.on_external_action(
+            "clear_team_search",
+            {},
             {"status": "confirmed", "view": "team"},
         )
         self.assertEqual(self.controller.last_confirmed_step, "team")

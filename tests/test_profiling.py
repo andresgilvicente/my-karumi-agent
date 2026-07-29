@@ -2,6 +2,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ui_control.profiling import LocalVoiceProfile, create_local_profile
 
@@ -13,6 +14,23 @@ class LocalVoiceProfileTestCase(unittest.TestCase):
             self.assertIsNone(
                 create_local_profile({"KARUMI_PROFILE_PATH": str(path)})
             )
+            self.assertFalse(path.exists())
+
+    def test_explicit_empty_environment_does_not_use_process_variables(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "unexpected.jsonl"
+            with patch.dict(
+                "os.environ",
+                {
+                    "KARUMI_PROFILE": "1",
+                    "KARUMI_PROFILE_PATH": str(path),
+                },
+                clear=True,
+            ):
+                profile = create_local_profile({})
+                if profile:
+                    profile.close()
+                self.assertIsNone(profile)
             self.assertFalse(path.exists())
 
     def test_profile_writes_correlated_turn_and_action_summary(self):

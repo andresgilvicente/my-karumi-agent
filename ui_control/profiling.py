@@ -245,7 +245,7 @@ class LocalVoiceProfile:
 
 
 def create_local_profile(environ: dict[str, str] | None = None) -> LocalVoiceProfile | None:
-    environ = environ or os.environ
+    environ = os.environ if environ is None else environ
     if environ.get("KARUMI_PROFILE") != "1":
         return None
     configured_path = environ.get("KARUMI_PROFILE_PATH")

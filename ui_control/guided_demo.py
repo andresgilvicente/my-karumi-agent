@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import time
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from enum import StrEnum
@@ -167,7 +166,6 @@ class GuidedDemoController:
         self.last_confirmed_step: str | None = None
         self.next_step_index = 0
         self.action_in_progress = False
-        self.last_user_activity: float | None = None
         self._execute_action = execute_action
         self._emit_speech = emit_speech
         self._sleep = sleep
@@ -219,7 +217,6 @@ class GuidedDemoController:
         if not self._connected or self._user_speaking:
             return
         self._user_speaking = True
-        self.last_user_activity = time.monotonic()
         self._cancel_timer()
         self._awaiting_answer = False
         self._answer_started = False
@@ -242,7 +239,6 @@ class GuidedDemoController:
         self._interrupted_speech = None
         if self.state != GuidedDemoState.PAUSED:
             self._pending_explanation_step = None
-        self.last_user_activity = time.monotonic()
         if self.state == GuidedDemoState.FAILED and self._deferred_failure:
             self._awaiting_answer = True
             self._answer_started = False
@@ -261,7 +257,6 @@ class GuidedDemoController:
 
     async def handle_control(self, intent: str, user_text: str) -> bool:
         self._user_speaking = False
-        self.last_user_activity = time.monotonic()
         self._awaiting_answer = False
         self._answer_started = False
         self._interrupted_speech = None
@@ -428,7 +423,13 @@ class GuidedDemoController:
 
     async def on_external_action(self, command: str, payload: dict, result: dict) -> None:
         if (
-            command not in {"navigate_to", "focus_target", "search_team_member"}
+            command
+            not in {
+                "navigate_to",
+                "focus_target",
+                "search_team_member",
+                "clear_team_search",
+            }
             or (result.get("status") != "confirmed" and not result.get("screenConfirmed"))
             or self.state
             in {

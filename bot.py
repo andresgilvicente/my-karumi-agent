@@ -56,9 +56,9 @@ from ui_control.profiling import LocalVoiceProfile, create_local_profile
 from ui_control.turns import ConsumedUserTurnStopStrategy
 
 # ---------------------------------------------------------------------------
-# Config — change these to swap models / voices without touching the pipeline.
+# Runtime configuration
 # ---------------------------------------------------------------------------
-STT_MODEL = "base" # "tiny"
+STT_MODEL = "base"
 STT_LANGUAGE = Language.EN
 
 LLM_MODEL = "qwen2.5:1.5b"
@@ -66,7 +66,7 @@ LLM_MODEL = "qwen2.5:1.5b"
 TTS_VOICE = "af_heart"
 TTS_LANGUAGE = Language.EN
 
-USER_SPEECH_TIMEOUT_SECS = 1 # 0.6
+USER_SPEECH_TIMEOUT_SECS = 1.0
 UI_ACTION_TIMEOUT_SECS = 5.0
 UI_CATALOG = load_catalog()
 GUIDED_DEMO = load_guided_demo(UI_CATALOG)

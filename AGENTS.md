@@ -1,57 +1,186 @@
-# Repository Guide
+# Engineering Guide
 
-## Project Boundaries
+## Project Purpose
 
-- The repository has two connected surfaces: the Pipecat voice application in `bot.py` and a React/Vite product mock in `client/`. React connects directly to Pipecat's SmallWebRTC runner and exchanges RTVI UI state, semantic commands, and command results with the voice worker.
-- `bot.py` is the only current application-owned Python entrypoint. Pipecat's runner supplies the WebRTC server and test client; the former FastAPI `server.py` was removed and port 8000 is no longer part of the application.
-- The frontend has no router package, API client, data layer, or persistence. `client/src/App.jsx` owns the data, components, and hash routes: `#home`, `#dashboard`, `#dashboard-goals`, `#analytics`, and `#team`. Unknown hashes are replaced with `#home`.
-- `session-ses_05d4.md` is historical session output, not a source of truth. Prefer current code, manifests, and lockfiles over historical prose.
+Karumi Agent is a fully local, voice-guided product demo of Metric Master Suite. A user speaks to a Pipecat worker, receives a spoken answer, and can ask the worker to perform a deliberately narrow set of semantic actions in the connected React interface. The product requirement is not merely to issue UI commands: React must prove the requested postcondition before the agent reports success.
 
-## Relevant Layout
+Keep installation and operator setup concise here. Use `README.md` for prerequisites, first-time setup, run instructions, and troubleshooting.
 
-- `bot.py`: runtime configuration, system instruction, turn handling, metrics observers, Pipecat pipeline, connection handlers, and runner entrypoint.
-- `client/src/ui-demo-catalog.json`: shared, versioned contract for the allowlisted semantic UI surface.
-- `ui_control/catalog.py`, `ui_control/intents.py`, and `ui_control/processor.py`: catalog loading/validation, deterministic intent resolution, serialized command execution, function schemas, and context-safe deterministic responses.
-- `ui_control/guided_demo.json`, `ui_control/guided_demo.py`, and `ui_control/guided_demo_processor.py`: declarative tour content, deterministic demo controls, interruptible session state, timers, and Pipecat turn/playback integration.
-- `ui_control/turns.py`: generation-correlated, uninterruptible turn finalization for deterministic transcripts consumed before the LLM aggregator.
-- `client/src/App.jsx`: all frontend views, state, interactions, and route definitions.
-- `client/src/UICommandBridge.jsx`: RTVI UI state publication, semantic command handlers, idempotent command results, highlights, and scrolling.
-- `client/src/VoiceControls.jsx` and `client/src/voiceClient.js`: WebRTC connection, microphone controls, voice activity status, and the configurable runner endpoint.
-- `client/src/App.css`: the complete responsive visual layer; `client/src/main.jsx` mounts the Pipecat provider, app, and client audio output.
-- `pyproject.toml`/`uv.lock` and `client/package.json`/`client/package-lock.json`: independent backend and frontend dependency boundaries.
+## Architecture
 
-## Runtime Configuration
+- React 19 and Vite 8 render the product mock. `client/src/App.jsx` owns in-memory product data, views, interactions, and hash routing; there is no router package, persistence layer, or product-data API.
+- React connects directly to Pipecat's SmallWebRTC runner. RTVI carries React `ui_state`, backend semantic commands, and React `ui_action_result` confirmations over that connection.
+- `bot.py` creates the local voice pipeline: transport input -> Whisper STT -> guided-demo control -> deterministic UI intent/tool-choice control -> user context -> Qwen through Ollama -> Kokoro TTS -> transport output -> assistant context.
+- Whisper `base` runs on CPU with `int8` English transcription. Qwen handles normal conversation through Ollama. Kokoro uses the English `af_heart` voice and a Markdown text filter before speech synthesis.
+- Explicit allowlisted UI requests are resolved before Qwen. The deterministic resolver owns semantic UI dispatch; catalog-derived function tools are only a limited fallback. Qwen must not choose arbitrary UI elements or own guided-demo state.
+- The guided controller owns the autonomous Dashboard -> Analytics -> Team sequence, proactive offer, silence timers, playback-aware advancement, deterministic controls, interruption handling, and external-action synchronization.
+- Optional local profiling observes turn, model, audio, resolution-path, and confirmed-action timing and writes correlated JSONL. It is observational and must not alter pipeline behavior.
+- Contract v4 supports navigation, twelve focus targets, Team member search, and Team search clear. Clear has an explicit confirmation matcher requiring the Team view and `cleared: true`; a confirmed clear also synchronizes an active tour to Team. Both paths have automated coverage, while current Chrome validation is pending.
 
-- The pipeline order is `transport.input()` -> Whisper STT -> guided-demo control processor -> UI intent/tool-choice processor -> user context aggregator -> Ollama LLM -> Kokoro TTS -> `transport.output()` -> assistant context aggregator. Kokoro uses Pipecat's `MarkdownTextFilter` after sentence aggregation so formatting markers are not pronounced. Latency, metrics, and guided-demo playback observers observe the worker without being pipeline processors.
-- Current settings are Whisper `base` on CPU with `int8`, Ollama `qwen2.5:1.5b`, Kokoro voice `af_heart`, English for STT, TTS, and responses, and a 1.0-second speech timeout for ending a user turn. Change these through the constants and `SYSTEM_INSTRUCTION` near the top of `bot.py`.
-- The default architecture is fully local and requires no `.env` or API keys. A model-backed run still needs the local runtime prerequisites documented in `README.md`, including Ollama, the configured model, and `espeak-ng`.
-- Local profiling is opt-in with `KARUMI_PROFILE=1`; it reuses Pipecat metrics and writes correlated JSONL events under ignored `profiles/` without changing normal logs. Use the fixed corpus and protocol in `docs/profiling-corpus.md`, and never commit machine-specific profile output.
-- React publishes `ui_state` with a per-connection `uiSessionId`, `uiContractVersion`, supported commands/views/targets, and a monotonic revision. The backend owns authorization through the shared catalog, ignores stale revisions, allows extra frontend capabilities, and requires every action's capabilities before dispatch.
-- Backend commands use `RTVIUICommandFrame` with the current `uiSessionId` and a unique `commandId`, wait up to five seconds for `ui_action_result`, and only treat a matching session, `status: ok`, command, view, and target as confirmation. Keep this acknowledgement requirement for every new UI action.
-- UI execution is allowlisted: navigation to Dashboard/Analytics/Team, focus actions for twelve catalog targets, and Team member search. Dashboard exposes its four KPI cards and Performance Overview; Analytics exposes its four KPI cards, Traffic Overview, and Traffic Sources; Team exposes its member list. Duplicate labels such as Conversion Rate resolve against the current view unless the user names a view explicitly. Navigation performs the catalog sequence for its destination; Analytics centers and highlights Traffic Overview. Goals, analytics tabs, coordinates, directional scrolling, and generic screen control remain unsupported.
-- Explicit supported requests are dispatched deterministically before Ollama because `qwen2.5:1.5b` can ignore required tool calls. Function tools remain a limited fallback, and Ollama continues to handle normal conversation. Logs identify `deterministic`, `function_call`, and `conversation` resolution paths.
-- The backend owns an autonomous three-step guided demo: Dashboard -> Analytics -> Team. It offers the tour after the compatible React state arrives, starts after five seconds of silence with a spoken warning, and advances four seconds after each completed explanation. All timing and copy are declarative in `ui_control/guided_demo.json`.
-- Guided-demo controls (`start`, `continue`, `pause`, `resume`, `stop`, and `restart`) are resolved deterministically. User speech cancels pending advancement, normal questions still reach Ollama, and advancement resumes only after playback ends. Actions remain serialized and confirmation-gated.
-- Voice reconnection reuses one Pipecat client, serializes connection operations, and holds reconnect for a short transport-settling window after every disconnect. Session generations and UI session nonces prevent old actions or acknowledgements from crossing into the replacement session.
+## Repository Structure
 
-## Development And Validation
+- `bot.py`: runtime constants, system instruction, Pipecat services and pipeline, RTVI event handling, confirmation correlation, session lifecycle, and runner entrypoint.
+- `client/src/ui-demo-catalog.json`: the single shared, versioned semantic UI contract loaded by both React and Python.
+- `client/src/App.jsx` and `client/src/App.css`: product views, state, stable semantic element IDs, interactions, and responsive presentation.
+- `client/src/UICommandBridge.jsx`: catalog-derived capability publication, command handlers, DOM postcondition checks, idempotency, and `ui_action_result` emission.
+- `client/src/VoiceControls.jsx` and `client/src/voiceClient.js`: connection lifecycle, microphone state, SmallWebRTC transport, and runner endpoint configuration.
+- `ui_control/catalog.py`: shared catalog loading, validation, capability checks, and coherent confirmation matching.
+- `ui_control/intents.py`: narrow deterministic phrase and alias resolution.
+- `ui_control/processor.py`: deterministic turn handling, serialized simple and compound actions, function fallback schemas, and confirmation-derived responses.
+- `ui_control/guided_demo.json`: declarative tour copy, timing, controls, and ordered steps.
+- `ui_control/guided_demo.py` and `ui_control/guided_demo_processor.py`: tour state machine, timers, playback and transcription integration, and external-action synchronization.
+- `ui_control/turns.py`: generation-correlated finalization of deterministic turns before the LLM aggregator.
+- `ui_control/profiling.py`: opt-in local JSONL profiling.
+- `tests/`: standard-library tests for UI control, guided-demo behavior, profiling, session isolation, and failure races.
+- `docs/`: focused manual and profiling protocols. Dependency boundaries are `pyproject.toml`/`uv.lock` and `client/package.json`/`client/package-lock.json`.
 
-- Python is constrained to 3.12 by `.python-version`, `pyproject.toml` (`>=3.12,<3.13`), and `uv.lock` (`==3.12.*`). Use `uv sync` from the repository root and run the backend with `uv run bot.py -t webrtc`.
-- `.nvmrc` selects Node 24 while `client/package.json` accepts Node >=22.12. Use npm inside `client/`: `npm ci` for installation, `npm run dev` for development, `npm run build` for a production build, and `npm run preview` to serve that build.
-- Under WSL, load Linux nvm with `source "$HOME/.nvm/nvm.sh"`, run `nvm use`, and confirm `command -v node` and `command -v npm` resolve under `/home/...`, not `/mnt/c/...`. Windows npm fails against this UNC workspace path.
-- Pipecat normally exposes its test client at `http://localhost:7860/client` and status at `/status`; Vite normally uses `http://localhost:5173`. Treat the URLs printed by the running tools as authoritative rather than assuming those ports are free.
-- The semantic UI suite uses Python's standard-library `unittest`: run `uv run python -m unittest discover -s tests`. No linter, formatter, typechecker, pre-commit hook, task runner, frontend test runner, or CI workflow is configured. Do not invent commands such as `pytest`, `npm test`, or `npm run lint`.
-- Profiling tests use temporary output paths. A runtime profile can be smoke-tested with `KARUMI_PROFILE=1 KARUMI_PROFILE_PATH=/tmp/karumi-profile.jsonl uv run bot.py -t webrtc`; profile files include local transcriptions only when explicitly enabled.
-- For backend-only edits, first run the import-independent syntax check `uv run python -m py_compile bot.py`. Run the full model-backed voice flow only when the change warrants its heavier local prerequisites.
-- For frontend edits, run `npm run build` under Linux Node inside `client/`, then manually exercise affected routes and interactions using the `Validate Frontend` checklist in `README.md`.
-- Voice and UI end-to-end verification is manual in Chrome through the React app. Click `Connect voice`, verify the proactive offer, the silent Dashboard -> Analytics -> Team flow, interruption with a question, pause/resume, stop/restart, and direct navigation during a tour. Every successful action must log its matching UI confirmations before the explanation. Pipecat's test client remains useful for voice-only isolation but cannot acknowledge UI actions.
+## Development Commands
 
-## Working Rules
+Use Python 3.12 and Node 24. See `README.md` for system prerequisites.
 
-- Inspect the relevant implementation and executable configuration before editing; do not rely on this file or `README.md` when they conflict with code.
-- Prefer the smallest change that solves the task and do not add dependencies unless the existing stack cannot reasonably support it.
-- Keep the AI stack local by default. Do not introduce hosted services, telemetry, secrets, or API-key requirements unless explicitly requested.
-- Do not claim UI success before React confirms the matching `commandId`; report errors and timeouts honestly.
-- After each change, run the cheapest relevant validation above; clearly distinguish automated checks from manual or unexecuted verification.
-- Update `README.md` when user setup or runtime behavior changes, this file when stable architecture or workflow changes, and `PROJECT_STATE.md` when a meaningful development phase completes.
-- Do not edit `uv.lock`, `client/package-lock.json`, or generated `client/dist/` assets manually. Use uv, npm, or the Vite build command that owns them.
+From the repository root:
+
+```bash
+uv sync
+uv run python -m py_compile bot.py ui_control/*.py
+uv run python -c "import bot"
+uv run python -m unittest discover -s tests
+uv run bot.py -t webrtc
+```
+
+For an opt-in profiling smoke run:
+
+```bash
+KARUMI_PROFILE=1 KARUMI_PROFILE_PATH=/tmp/karumi-profile.jsonl uv run bot.py -t webrtc
+```
+
+Load Linux nvm, select Node 24, and verify that Node and npm resolve under `/home/...`, not `/mnt/c/...`:
+
+```bash
+source "$HOME/.nvm/nvm.sh"
+nvm use
+command -v node
+command -v npm
+```
+
+From `client/`:
+
+```bash
+npm ci
+npm run dev
+npm run build
+npm run preview
+```
+
+No linter, formatter, typechecker, frontend test runner, or CI command is configured. Do not invent `pytest`, `npm test`, or `npm run lint`. Perform current browser verification from `docs/FINAL_CHECKLIST.md` in Chrome; Pipecat's diagnostic client cannot confirm product UI actions.
+
+## Core Invariants
+
+- Shared contract: `client/src/ui-demo-catalog.json` is the only semantic UI command, view, target, capability, phrase, and alias contract. Python loads that exact file. Guided-demo controls remain owned by `ui_control/guided_demo.json`. Never create a second frontend or backend allowlist.
+- Semantic control only: commands carry allowlisted view IDs, target IDs, or Team search text. Never add coordinate commands, directional screen control, or model-generated DOM/CSS selectors.
+- Confirmation before success: never claim or synthesize UI success until React returns a coherent result for the pending action. Match the current `uiSessionId`, unique `commandId`, command, `status: ok`, and command-specific view, target, query, count/name, or clear postcondition.
+- Command identity: generate a new unique `commandId` for every concrete client command, including each member of a compound action. A command ID must never cross sessions or identify two payloads.
+- Timeout: every concrete command has its own five-second confirmation timeout. Remove timed-out pending entries and report failure; never accept a later result as success.
+- Serialization: all semantic actions, including tour and compound actions, pass through the shared executor lock. Preserve command order, stop a sequence on its first failure, and recheck session generation between commands.
+- Late-result rejection: ignore unknown, completed, timed-out, stale-generation, and old-session confirmations. An incoherent result must resolve as `confirmation_mismatch`, not partial success.
+- Session cleanup and reconnect: connection replacement or disconnect must reject pending actions, increment generation, clear UI state and conversational/tool state, cancel tour timers/tasks, and prevent old callbacks from mutating the new session. React must rotate its UI session nonce, clear idempotency state, and serialize reconnect operations through the transport-settling window.
+- Search truth: Team results come only from React's confirmed `matchCount` and `matchedNames`. Qwen may phrase confirmed data but cannot invent names, counts, or search success.
+- Deterministic UI versus conversation: explicit UI intents and guided-demo controls are consumed before Ollama. Normal questions go to Qwen. Qwen must not advance, pause, complete, or narrate success for controller-owned actions.
+- Idempotency: React stores in-flight and completed results by `commandId`. An exact retry returns the same result; reuse with another request returns `command_id_reused`; a stale session emits nothing into the replacement session.
+- Capability authorization: dispatch only against a compatible contract and currently advertised command, view, and target capabilities. Ignore stale `ui_state` revisions.
+- Source ownership: do not manually edit lockfiles or generated `client/dist/` output. Use uv, npm, and Vite to own generated artifacts.
+- Repository history: do not commit, amend, push, or create a pull request automatically. Do so only when the user explicitly asks.
+
+## Extending The UI Contract
+
+Make the smallest coherent change. Any action is incomplete until its real React postcondition can be acknowledged and the backend validates that acknowledgement. Bump `uiContractVersion` when the command, capability, payload, result, view, or target wire contract changes; do not bump it for copy-only edits.
+
+### Add A View
+
+1. Implement the route and semantic destination element in `App.jsx`; preserve hash navigation and unknown-route behavior.
+2. Add the view once in `ui-demo-catalog.json`, including hash, destination element ID, aliases, navigation aliases, default action, ordered navigation actions, and success copy.
+3. Ensure every presentation target belongs to the new view and React publishes the view and visible targets from the catalog.
+4. Add catalog, intent, capability, navigation sequence, failure, and confirmation-mismatch tests.
+5. Run the Vite build and verify in Chrome that React confirms the destination and every presentation command before speech reports success.
+
+### Add A Target
+
+1. Give the rendered element a stable semantic `id`; do not derive selectors in the model or backend.
+2. Add the target once to the catalog with its view, label, resolver aliases, default command, allowed commands, and success copy.
+3. Confirm that `pageState()` advertises it only when visible and that bridge handlers validate its catalog view and allowed command.
+4. Test catalog validation, positive intent resolution, wrong-view rejection, ambiguity, compound focus ordering, timeout, and coherent target confirmation.
+5. Build React and manually confirm scroll/highlight postconditions and the matching result payload.
+
+### Add Or Change Aliases
+
+1. Change the relevant catalog phrase or alias list, not a duplicated backend list.
+2. Check overlap with every view, target, Team search reserved term, clear phrase, and duplicate label.
+3. Add positive, negative, split-transcript where relevant, current-view disambiguation, and explicit-view disambiguation tests.
+4. Verify representative phrases through Chrome before treating speech recognition behavior as validated.
+
+### Add An Intent
+
+1. Define a narrow, explicit phrase surface in the shared catalog and decide its precedence relative to clear, search, target focus, and navigation.
+2. Resolve it deterministically in `intents.py`; unsupported or ambiguous text must fall through to conversation rather than guess an action.
+3. Route it through `UIActionToolChoiceProcessor` and build spoken output only from the executor's confirmed result.
+4. Add positive, negative, ambiguity, previous-transcript, consumed-turn, session-change, and failure-response tests as applicable.
+5. If a function fallback is needed, derive its schema choices from the catalog and keep deterministic dispatch authoritative.
+
+### Add A Client UI Action
+
+1. Add the command and payload metadata to the catalog and bump the contract version.
+2. Extend catalog validation, required-capability calculation, and `confirmation_matches()` with an explicit command-specific postcondition.
+3. Add a `UICommandBridge` handler using `runCommand`; validate the allowlist, await the actual React/DOM state, and return `status: ok` data only after that state is true.
+4. Extend the serialized backend executor and confirmation-derived response. Never accept a generic `ok` as sufficient.
+5. Test malformed catalog data, missing capability, mismatched session/command/result fields, timeout, late confirmation, ID reuse, disconnect, and session replacement.
+6. Build React and inspect the matching `commandId` result in a current Chrome voice run.
+
+### Add A Compound Action
+
+1. Keep orchestration in `UIActionExecutor` under its existing shared lock; do not create an independent queue.
+2. Express ordered presentation commands through catalog definitions where possible.
+3. Give every emitted command a fresh ID and five-second timeout, abort on the first unconfirmed result, and preserve enough structured failure state to avoid a false overall success.
+4. Synchronize the guided controller only from the final confirmed or explicitly screen-confirmed state intended by its state machine.
+5. Test strict ordering, serialization against concurrent actions, intermediate failure, timeout, generation changes at every boundary, and response suppression after session replacement.
+6. Verify that React confirms every member command before the compound success response.
+
+### Add A Tour Step
+
+1. Add declarative action, transition copy, and explanation to `ui_control/guided_demo.json`; the action must already be supported by the catalog and executor.
+2. Extend validation only if the step schema changes; keep sequencing and ownership in `GuidedDemoController`, not Qwen.
+3. Test silent progression, explicit controls, timer invalidation, playback completion, question interruption, direct external actions, action failure, stop/restart, and disconnect cleanup around the new step.
+4. Run all Python tests and the Vite build.
+5. Complete the Chrome tour matrix in `docs/FINAL_CHECKLIST.md`, checking each React confirmation before its explanation.
+
+## Sensitive Areas
+
+- Pipeline processor order in `bot.py` determines whether a turn is consumed deterministically or reaches Qwen. Reordering processors can duplicate context, tools, or speech.
+- `pending_ui_actions`, `session_generation`, `uiSessionId`, connection handlers, and the five-second timeout form one safety boundary. Review them together.
+- `UICommandBridge.jsx` combines asynchronous React updates, DOM settlement, idempotency, and disconnect epochs. A visual mutation alone is not confirmation.
+- Guided-demo timers, playback callbacks, action tasks, transcript grace, and generation invalidation are race-sensitive. Test cancellation and stale callbacks, not only the happy path.
+- `ConsumedUserTurnStopStrategy` and deterministic context writes preserve coherent transcripts when audio is interrupted. Do not bypass them for new deterministic responses.
+- Search result payloads cross a trust boundary. Keep backend shape validation and React-derived names/counts strict.
+- Profiling output can contain local transcriptions. Keep machine-specific JSONL under ignored paths and out of commits.
+- Lockfiles and generated Vite assets must be changed only by their owning commands.
+
+## Checklist Before Finalizing A Diff
+
+- Inspect the executable implementation, shared catalog, tests, manifests, and existing worktree changes before editing.
+- Confirm the change uses the shared catalog and introduces no duplicate allowlist, coordinates, generated selectors, or unconfirmed success path.
+- Check command uniqueness, five-second timeout behavior, serialization, coherent confirmation matching, late-result rejection, idempotency, and disconnect cleanup for every affected action.
+- Run `uv run python -m py_compile bot.py ui_control/*.py`, `uv run python -c "import bot"`, and `uv run python -m unittest discover -s tests` for backend or contract changes.
+- Run `npm run build` from `client/` under Linux Node 24 for frontend or contract changes.
+- Execute the affected Chrome cases in `docs/FINAL_CHECKLIST.md`; clearly label any unexecuted manual validation.
+- Run `git diff --check` and review the complete diff without reverting unrelated worktree changes.
+- Update the owning documentation, but do not commit unless explicitly requested.
+
+## Documentation Ownership
+
+- `README.md`: installation, prerequisites, normal run instructions, user-facing scope, and troubleshooting.
+- `AGENTS.md`: stable architecture, engineering invariants, extension procedure, sensitive areas, and validation commands.
+- `PROJECT_STATE.md`: short, dated snapshot of verified state, warnings, limitations, bugs, and next action.
+- `PROJECT_JOURNEY.md`: development chronology and superseded phase history; link to it rather than accumulating history in `PROJECT_STATE.md`.
+- `docs/DEMO_SCRIPT.md`: presenter sequence, exact showcase phrases, timing cues, and recovery steps.
+- `docs/FINAL_CHECKLIST.md`: current manual Chrome, voice, UI, reconnect, and tour acceptance matrix.
+- `docs/profiling-corpus.md`: fixed local performance corpus and collection protocol.
+- `docs/guided-demo.md`: detailed guided-demo behavior and focused debugging notes.

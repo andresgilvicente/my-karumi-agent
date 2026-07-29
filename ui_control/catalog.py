@@ -80,7 +80,11 @@ class UIControlCatalog:
             ("supportedTargets", set(self.targets)),
         ):
             announced = state.get(key)
-            if not isinstance(announced, list) or not required.issubset(announced):
+            if (
+                not isinstance(announced, list)
+                or not all(isinstance(capability, str) for capability in announced)
+                or not required.issubset(announced)
+            ):
                 return False
         return True
 
@@ -102,7 +106,10 @@ class UIControlCatalog:
             return False
         if result.get("command") != command:
             return False
-        if result.get("status") != "ok":
+        status = result.get("status")
+        if not isinstance(status, str) or status not in {"ok", "error"}:
+            return False
+        if status == "error":
             return True
         if command == "navigate_to":
             return result.get("currentPage") == payload.get("view")
@@ -121,6 +128,8 @@ class UIControlCatalog:
                 and all(isinstance(name, str) and name.strip() for name in matched_names)
                 and match_count == len(matched_names)
             )
+        if command == "clear_team_search":
+            return result.get("currentPage") == "team" and result.get("cleared") is True
         target = payload.get("target")
         definition = self.targets.get(target)
         return (
@@ -149,11 +158,15 @@ def validate_catalog(data: dict) -> None:
         raise ValueError("catalog must define commands, views, and targets")
 
     for command, definition in commands.items():
+        if not isinstance(definition, dict):
+            raise ValueError(f"command {command} must define an object")
         payload_key = definition.get("payloadKey")
         if payload_key is not None and payload_key not in {"view", "target", "query"}:
             raise ValueError(f"command {command} has an unsupported payloadKey")
         if definition.get("clientCommand", True) not in {True, False}:
             raise ValueError(f"command {command} has an invalid clientCommand value")
+        if "view" in definition and definition["view"] not in views:
+            raise ValueError(f"command {command} must define a supported view")
         if definition.get("payloadKey") == "query" and definition.get("view") not in views:
             raise ValueError(f"command {command} must define a supported view")
 

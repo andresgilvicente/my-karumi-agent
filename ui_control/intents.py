@@ -39,13 +39,6 @@ def _requested_views(text: str, catalog: UIControlCatalog) -> dict[str, int]:
     return matches
 
 
-def _requested_view(text: str, catalog: UIControlCatalog) -> tuple[str, int] | None:
-    matches = _requested_views(text, catalog)
-    if len(matches) != 1:
-        return None
-    return next(iter(matches.items()))
-
-
 def _requested_target(
     text: str,
     catalog: UIControlCatalog,
@@ -216,19 +209,28 @@ def fallback_tool_name(
         and catalog.targets[requested_target[0]]["view"] != requested_view[0]
     ):
         return None
-    if (
-        requested_target is not None
-        and _first_phrase_index(current, catalog.data["scrollPhrases"]) is not None
-    ):
-        return "scroll_to"
-    if (
-        requested_target is not None
-        and _first_phrase_index(current, catalog.data["focusPhrases"]) is not None
-    ):
-        return "focus_target"
-    if (
-        _first_phrase_index(current, catalog.data["fallbackNavigationPhrases"]) is not None
-        and requested_view is not None
+
+    informational_index = _first_phrase_index(
+        current,
+        ("what", "who", "why", "how", "when", "tell me", "explain", "describe"),
+    )
+
+    def action_is_explicit(action_index: int | None) -> bool:
+        return action_index is not None and (
+            informational_index is None or action_index < informational_index
+        )
+
+    if requested_target is not None:
+        if action_is_explicit(
+            _first_phrase_index(current, catalog.data["scrollPhrases"])
+        ):
+            return "scroll_to"
+        if action_is_explicit(
+            _first_phrase_index(current, catalog.data["focusPhrases"])
+        ):
+            return "focus_target"
+    if requested_view is not None and action_is_explicit(
+        _first_phrase_index(current, catalog.data["fallbackNavigationPhrases"])
     ):
         return "navigate_to"
     return None

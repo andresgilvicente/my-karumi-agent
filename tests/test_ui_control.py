@@ -8,7 +8,7 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter
 
 from bot import pending_ui_action_for_session, reject_pending_ui_actions
-from ui_control.catalog import load_catalog
+from ui_control.catalog import load_catalog, validate_catalog
 from ui_control.intents import fallback_tool_name, resolve_ui_intent
 from ui_control.processor import (
     UIActionExecutor,
@@ -74,6 +74,39 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
         state["supportedCommands"] = ["navigate_to"]
         self.assertFalse(self.catalog.is_contract_compatible(state))
 
+    def test_catalog_rejects_non_object_command_definitions(self):
+        data = {
+            **self.catalog.data,
+            "commands": {
+                **self.catalog.commands,
+                "clear_team_search": "invalid",
+            },
+        }
+        with self.assertRaisesRegex(
+            ValueError, "command clear_team_search must define an object"
+        ):
+            validate_catalog(data)
+
+        data = {
+            **self.catalog.data,
+            "commands": {
+                **self.catalog.commands,
+                "clear_team_search": {
+                    **self.catalog.commands["clear_team_search"],
+                    "view": "unsupported",
+                },
+            },
+        }
+        with self.assertRaisesRegex(
+            ValueError, "command clear_team_search must define a supported view"
+        ):
+            validate_catalog(data)
+
+    def test_catalog_rejects_non_string_capabilities(self):
+        state = self.compatible_state()
+        state["supportedCommands"].append({"invalid": True})
+        self.assertFalse(self.catalog.is_contract_compatible(state))
+
     def test_navigation_intents(self):
         cases = {
             "Take me to Dashboard": ("navigate_to", {"view": "dashboard"}),
@@ -110,6 +143,7 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
         cases = (
             "What is Analytics?",
             "What can I see in Dashboard?",
+            "What can Dashboard show me?",
             "Tell me about the Team.",
             "Is Analytics useful?",
             "Who is Tim?",
@@ -121,6 +155,11 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
         for text in cases:
             with self.subTest(text=text):
                 self.assertIsNone(resolve_ui_intent(text, self.catalog))
+                self.assertIsNone(fallback_tool_name(text, self.catalog))
+        self.assertEqual(
+            fallback_tool_name("Dashboard, please open it.", self.catalog),
+            "navigate_to",
+        )
 
     def test_ambiguous_and_generic_requests_do_not_force_a_tool(self):
         cases = (
@@ -505,13 +544,17 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
     def test_team_search_phrases_extract_only_the_name(self):
         cases = {
             "Search for Juan.": "Juan",
+            "Search for Olivia.": "Olivia",
             "Is there anyone called Juan?": "Juan",
             "Does someone named Sarah work here?": "Sarah",
+            "Does someone named Michael work here?": "Michael",
             "Find a team member called Michael.": "Michael",
+            "Find a team member called Alex.": "Alex",
             "Do we have a Juan on the team?": "Juan",
             "Is anyone named Alex?": "Alex",
             "Could you search for Olivia?": "Olivia",
             "Search for Juan on the team.": "Juan",
+            "Search for Li.": "Li",
         }
         for text, query in cases.items():
             with self.subTest(text=text):
@@ -543,6 +586,83 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
                     resolve_ui_intent(text, self.catalog),
                     ("clear_team_search", {}),
                 )
+
+    def test_documented_ui_phrases_match_the_resolver(self):
+        cases = {
+            "Go to Dashboard.": ("navigate_to", {"view": "dashboard"}),
+            "Go to Analytics.": ("navigate_to", {"view": "analytics"}),
+            "Can you please open Analytics?": ("navigate_to", {"view": "analytics"}),
+            "Take me back to Team.": ("navigate_to", {"view": "team"}),
+            "Could you navigate to Dashboard?": ("navigate_to", {"view": "dashboard"}),
+            "Show me the Team section.": ("navigate_to", {"view": "team"}),
+            "Take me to Analytics.": ("navigate_to", {"view": "analytics"}),
+            "Show me Total Revenue.": ("focus_target", {"target": "total-revenue-card"}),
+            "Show me Active Users.": ("focus_target", {"target": "active-users-card"}),
+            "Focus on Active Users.": ("focus_target", {"target": "active-users-card"}),
+            "Focus on Dashboard Conversion Rate.": (
+                "focus_target",
+                {"target": "conversion-rate-card"},
+            ),
+            "Focus on Growth Rate.": ("focus_target", {"target": "growth-rate-card"}),
+            "Highlight Performance Overview.": (
+                "focus_target",
+                {"target": "performance-overview"},
+            ),
+            "Focus on Page Views.": ("focus_target", {"target": "page-views-card"}),
+            "Highlight Click-through Rate.": (
+                "focus_target",
+                {"target": "click-through-rate-card"},
+            ),
+            "Focus on Average Session Duration.": (
+                "focus_target",
+                {"target": "session-duration-card"},
+            ),
+            "Focus on Analytics Conversion Rate.": (
+                "focus_target",
+                {"target": "analytics-conversion-card"},
+            ),
+            "Show me Traffic Overview.": ("focus_target", {"target": "traffic-overview"}),
+            "Focus on Traffic Sources.": ("focus_target", {"target": "traffic-sources"}),
+            "Take me to the team member list.": (
+                "focus_target",
+                {"target": "team-member-list"},
+            ),
+            "Is there anyone called Juan?": ("search_team_member", {"query": "Juan"}),
+            "Search for Olivia.": ("search_team_member", {"query": "Olivia"}),
+            "Find a team member called Alex.": (
+                "search_team_member",
+                {"query": "Alex"},
+            ),
+            "Does someone named Michael work here?": (
+                "search_team_member",
+                {"query": "Michael"},
+            ),
+            "Search for Li.": (
+                "search_team_member",
+                {"query": "Li"},
+            ),
+            "Clear the search.": ("clear_team_search", {}),
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(resolve_ui_intent(text, self.catalog), expected)
+
+        for text in (
+            "What does this product do?",
+            "Open the Goals tab.",
+            "What does the Analytics section show?",
+            "Show me Dashboard and Analytics.",
+            "Show me Total Revenue and Traffic Sources.",
+            "Focus on Traffic Sources in Dashboard.",
+            "Search for revenue.",
+            "Search for an engineer.",
+            "Scroll down.",
+            "Click the second analytics tab.",
+            "Go to Tim's profile.",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(resolve_ui_intent(text, self.catalog))
+                self.assertIsNone(fallback_tool_name(text, self.catalog))
 
     async def test_team_clear_search_execution(self):
         calls = []
@@ -579,6 +699,28 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
                 ("clear_team_search", {}),
             ],
         )
+
+    async def test_team_clear_search_does_not_confirm_after_session_change(self):
+        calls = []
+        generation = 1
+
+        async def send_command(command, payload):
+            nonlocal generation
+            calls.append((command, payload))
+            generation += 1
+            return {"status": "confirmed", "cleared": True}
+
+        executor = UIActionExecutor(
+            self.catalog,
+            send_command,
+            lambda: self.compatible_state("team", ["team-member-list"]),
+            lambda: generation,
+        )
+        self.assertEqual(
+            await executor.execute("clear_team_search", {}),
+            {"status": "error", "code": "session_changed", "view": "team", "screenConfirmed": False},
+        )
+        self.assertEqual(calls, [("clear_team_search", {})])
 
     async def test_deterministic_ui_intent_closes_the_consumed_user_turn(self):
         context = LLMContext()
@@ -744,6 +886,73 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
             )
         )
 
+    def test_clear_search_confirmation_requires_team_and_cleared_state(self):
+        expected = {"uiSessionId": "current-session"}
+        self.assertTrue(
+            self.catalog.confirmation_matches(
+                "clear_team_search",
+                expected,
+                {
+                    "status": "ok",
+                    "command": "clear_team_search",
+                    "currentPage": "team",
+                    "cleared": True,
+                    "uiSessionId": "current-session",
+                },
+            )
+        )
+        for result in (
+            {
+                "status": "ok",
+                "command": "clear_team_search",
+                "currentPage": "analytics",
+                "cleared": True,
+                "uiSessionId": "current-session",
+            },
+            {
+                "status": "ok",
+                "command": "clear_team_search",
+                "currentPage": "team",
+                "cleared": False,
+                "uiSessionId": "current-session",
+            },
+            {
+                "status": "ok",
+                "command": "clear_team_search",
+                "currentPage": "team",
+                "cleared": True,
+                "uiSessionId": "old-session",
+            },
+            {
+                "command": "clear_team_search",
+                "currentPage": "team",
+                "cleared": True,
+                "uiSessionId": "current-session",
+            },
+            {
+                "status": "confirmed",
+                "command": "clear_team_search",
+                "currentPage": "team",
+                "cleared": True,
+                "uiSessionId": "current-session",
+            },
+            {
+                "status": [],
+                "command": "clear_team_search",
+                "currentPage": "team",
+                "cleared": True,
+                "uiSessionId": "current-session",
+            },
+        ):
+            with self.subTest(result=result):
+                self.assertFalse(
+                    self.catalog.confirmation_matches(
+                        "clear_team_search",
+                        expected,
+                        result,
+                    )
+                )
+
     async def test_session_cleanup_rejects_pending_actions(self):
         loop = asyncio.get_running_loop()
         first = loop.create_future()
@@ -774,6 +983,34 @@ class UIControlTestCase(unittest.IsolatedAsyncioTestCase):
             pending_ui_action_for_session(pending, "old-command", session_generation=3),
             pending["old-command"],
         )
+
+    async def test_stale_clear_confirmation_cannot_resolve_a_new_session(self):
+        future = asyncio.get_running_loop().create_future()
+        expected_payload = {"uiSessionId": "old-ui-session"}
+        coherent_result = {
+            "status": "ok",
+            "command": "clear_team_search",
+            "currentPage": "team",
+            "cleared": True,
+            "uiSessionId": "old-ui-session",
+        }
+        pending = {
+            "old-clear": (
+                future,
+                "clear_team_search",
+                expected_payload,
+                7,
+            )
+        }
+        self.assertTrue(
+            self.catalog.confirmation_matches(
+                "clear_team_search", expected_payload, coherent_result
+            )
+        )
+        self.assertIsNone(
+            pending_ui_action_for_session(pending, "old-clear", session_generation=8)
+        )
+        self.assertFalse(future.done())
 
     def test_deterministic_turn_is_recorded_before_tts_without_duplicates(self):
         context = LLMContext()

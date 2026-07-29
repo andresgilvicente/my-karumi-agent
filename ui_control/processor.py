@@ -15,7 +15,7 @@ from ui_control.turns import ConsumedUserTurnFrame
 
 
 def record_deterministic_turn(context: LLMContext, user_text: str, response: str) -> TTSSpeakFrame:
-    """Commit the confirmed result before audio so an interruption keeps the turn coherent."""
+    """Commit a deterministic response before audio so interruptions keep the turn coherent."""
     context.add_message({"role": "user", "content": user_text.strip()})
     context.add_message({"role": "assistant", "content": response})
     return TTSSpeakFrame(response, append_to_context=False)
