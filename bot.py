@@ -42,7 +42,7 @@ from pipecat.services.ollama.llm import OLLamaLLMService
 from pipecat.services.whisper.stt import WhisperSTTService
 from pipecat.transcriptions.language import Language
 from pipecat.transports.base_transport import BaseTransport, TransportParams
-from pipecat.turns.user_start import VADUserTurnStartStrategy
+from pipecat.turns.user_start import TranscriptionUserTurnStartStrategy
 from pipecat.turns.user_stop import SpeechTimeoutUserTurnStopStrategy
 from pipecat.turns.user_turn_strategies import UserTurnStrategies
 from pipecat.utils.text.markdown_text_filter import MarkdownTextFilter
@@ -54,12 +54,14 @@ from ui_control.guided_demo_processor import GuidedDemoProcessor
 from ui_control.processor import UIActionExecutor, UIActionToolChoiceProcessor
 from ui_control.profiling import LocalVoiceProfile, create_local_profile
 from ui_control.turns import ConsumedUserTurnStopStrategy
+from voice_input import BotEchoSuppressionProcessor
 
 # ---------------------------------------------------------------------------
 # Runtime configuration
 # ---------------------------------------------------------------------------
 STT_MODEL = "base"
 STT_LANGUAGE = Language.EN
+STT_NO_SPEECH_PROB = 0.2
 
 LLM_MODEL = "qwen2.5:1.5b"
 
@@ -189,12 +191,16 @@ class VoiceMetricsObserver(BaseObserver):
         stt_name: str,
         llm_name: str,
         tts_name: str,
+        transcription_source=None,
+        bot_speech_listener=None,
         profile: LocalVoiceProfile | None = None,
     ):
         super().__init__()
         self._stt_name = stt_name
         self._llm_name = llm_name
         self._tts_name = tts_name
+        self._transcription_source = transcription_source
+        self._bot_speech_listener = bot_speech_listener
         self._profile = profile
         self._speech_end_time: float | None = None
         self._tts_processing_total = 0.0
@@ -204,6 +210,12 @@ class VoiceMetricsObserver(BaseObserver):
         self._frame_history: deque[int] = deque(maxlen=200)
 
     async def on_push_frame(self, data: FramePushed):
+        if (
+            isinstance(data.frame, TranscriptionFrame)
+            and self._transcription_source is not None
+            and data.source is not self._transcription_source
+        ):
+            return
         if (
             data.direction != FrameDirection.DOWNSTREAM
             or data.frame.id in self._processed_frames
@@ -255,7 +267,12 @@ class VoiceMetricsObserver(BaseObserver):
             log_agent_response(frame.text.strip())
         elif isinstance(frame, MetricsFrame):
             self._handle_metrics(frame)
+        elif isinstance(frame, BotStartedSpeakingFrame):
+            if self._bot_speech_listener:
+                self._bot_speech_listener.on_bot_started_speaking()
         elif isinstance(frame, BotStoppedSpeakingFrame):
+            if self._bot_speech_listener:
+                self._bot_speech_listener.on_bot_stopped_speaking()
             if self._tts_processing_total > 0:
                 logger.debug(
                     f"[LATENCY] TTS generation total across segments: "
@@ -340,6 +357,7 @@ async def run_bot(
             {
                 "stt_model": STT_MODEL,
                 "stt_language": str(STT_LANGUAGE),
+                "stt_no_speech_prob": STT_NO_SPEECH_PROB,
                 "llm_model": LLM_MODEL,
                 "tts_voice": TTS_VOICE,
                 "tts_language": str(TTS_LANGUAGE),
@@ -368,8 +386,11 @@ async def run_bot(
         settings=WhisperSTTService.Settings(
             model=STT_MODEL,
             language=STT_LANGUAGE,
+            no_speech_prob=STT_NO_SPEECH_PROB,
         ),
     )
+
+    voice_input_guard = BotEchoSuppressionProcessor()
 
     llm = OLLamaLLMService(
         settings=OLLamaLLMService.Settings(
@@ -538,7 +559,12 @@ async def run_bot(
         user_params=LLMUserAggregatorParams(
             vad_analyzer=SileroVADAnalyzer(),
             user_turn_strategies=UserTurnStrategies(
-                start=[VADUserTurnStartStrategy()],
+                start=[
+                    TranscriptionUserTurnStartStrategy(
+                        use_interim=False,
+                        enable_interruptions=False,
+                    )
+                ],
                 stop=[
                     ConsumedUserTurnStopStrategy(),
                     SpeechTimeoutUserTurnStopStrategy(
@@ -554,6 +580,8 @@ async def run_bot(
         stt_name=stt.name,
         llm_name=llm.name,
         tts_name=tts.name,
+        transcription_source=voice_input_guard,
+        bot_speech_listener=voice_input_guard,
         profile=profile,
     )
     demo_observer = GuidedDemoPlaybackObserver(demo_controller)
@@ -580,6 +608,7 @@ async def run_bot(
         [
             transport.input(),
             stt,
+            voice_input_guard,
             guided_demo_gate,
             ui_intent_gate,
             user_aggregator,

@@ -8,7 +8,9 @@ from pipecat.frames.frames import (
     TranscriptionFrame,
     UninterruptibleFrame,
     VADUserStartedSpeakingFrame,
+    VADUserStoppedSpeakingFrame,
 )
+from pipecat.processors.frame_processor import FrameDirection
 from ui_control.catalog import load_catalog
 from ui_control.guided_demo import (
     GuidedDemoController,
@@ -17,6 +19,7 @@ from ui_control.guided_demo import (
     resolve_demo_intent,
 )
 from ui_control.turns import ConsumedUserTurnFrame, ConsumedUserTurnStopStrategy
+from ui_control.guided_demo_processor import GuidedDemoProcessor
 from pipecat.turns.types import ProcessFrameResult
 
 
@@ -452,6 +455,52 @@ class GuidedDemoTestCase(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.controller.current_step_index, 0)
         self.assertEqual(self.controller.state, GuidedDemoState.RUNNING)
         self.assertEqual(self.speech[-1][0], self.definition.steps[0].transition_message)
+
+    async def test_vad_without_a_transcription_does_not_interrupt_the_introduction(self):
+        processor = GuidedDemoProcessor(self.controller, self.definition)
+        pushed = []
+
+        async def push_frame(frame, direction=FrameDirection.DOWNSTREAM):
+            pushed.append((frame, direction))
+
+        processor.push_frame = push_frame
+        await self.connect_and_offer()
+        await self.controller.on_bot_started_speaking()
+
+        await processor.process_frame(VADUserStartedSpeakingFrame(), FrameDirection.UPSTREAM)
+        await processor.process_frame(VADUserStoppedSpeakingFrame(), FrameDirection.UPSTREAM)
+        await self.controller.on_bot_stopped_speaking()
+        await asyncio.sleep(0)
+
+        self.assertEqual(len(pushed), 2)
+        self.assertEqual(processor.user_turn_generation, 0)
+        self.assertTrue(self.controller.pending_auto_advance)
+        self.assertEqual(
+            [text for text, _ in self.speech].count(self.definition.introduction),
+            1,
+        )
+
+    async def test_a_real_transcription_starts_one_guided_user_turn(self):
+        processor = GuidedDemoProcessor(self.controller, self.definition)
+        pushed = []
+
+        async def push_frame(frame, direction=FrameDirection.DOWNSTREAM):
+            pushed.append((frame, direction))
+
+        processor.push_frame = push_frame
+        await self.connect_and_offer()
+        await self.controller.on_bot_started_speaking()
+        transcription = TranscriptionFrame(
+            text="What does the dashboard show?",
+            user_id="user",
+            timestamp="2026-07-29T00:00:00Z",
+        )
+
+        await processor.process_frame(transcription, FrameDirection.DOWNSTREAM)
+
+        self.assertEqual(processor.user_turn_generation, 1)
+        self.assertEqual(pushed, [(transcription, FrameDirection.DOWNSTREAM)])
+        self.assertFalse(self.controller.pending_auto_advance)
 
     async def test_missing_transcription_replays_an_interrupted_explanation(self):
         await self.start_explicit_demo()
