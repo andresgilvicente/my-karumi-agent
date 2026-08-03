@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Embedded status panel</title>
+<style>
+  body { margin: 0; padding: 16px 18px; background: #171a21; color: #e6e8ec;
+         font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; }
+  h3 { margin: 0 0 8px; font-size: 14px; }
+  p { margin: 0 0 12px; color: #9aa1ae; }
+  button { background: #6ea8fe; color: #0b1020; border: 0; padding: 8px 14px;
+           border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
+</style>
+</head>
+<body>
+  <!--
+    Lives in its own JS realm, so its walker hands out refs starting at e1 —
+    the same ids the parent document is already using. Namespacing those apart
+    is the host's job.
+  -->
+  <h3>Embedded status panel</h3>
+  <p>All systems nominal. Last checked just now.</p>
+  <button type="button" id="embedded-action">Acknowledge</button>
+  <script>
+    document.getElementById("embedded-action").addEventListener("click", (e) => {
+      e.target.textContent = "Acknowledged";
+      e.target.disabled = true;
+    });
+  </script>
+</body>
+</html>

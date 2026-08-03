@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fixture Console — karumi-agent test harness</title>
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+<!--
+  This fixture exists to EXERCISE the browser adapter, not to imitate any real
+  product. It deliberately contains the structures that break naive agents:
+
+    - a client-rendered view switch with no page load (SPA navigation)
+    - a background timer that mutates the DOM continuously (ref stability)
+    - content far below the fold (offscreen tagging, scroll_to)
+    - a <canvas> chart with no accessible text of its own
+    - a data table with real numbers reachable through the a11y tree
+    - a modal dialog that appears and disappears
+    - a same-origin <iframe> (cross-frame ref namespacing)
+    - a disabled control and a destructive-looking button (policy checks)
+
+  Nothing here is referenced by name anywhere in the agent's source.
+-->
+<header class="topbar">
+  <h1>Fixture Console</h1>
+  <nav aria-label="Main">
+    <button type="button" data-view="overview" class="navlink" aria-current="page">Overview</button>
+    <button type="button" data-view="analytics" class="navlink">Analytics</button>
+    <button type="button" data-view="settings" class="navlink">Settings</button>
+  </nav>
+</header>
+
+<main id="view"></main>
+
+<div id="modal-root"></div>
+
+<footer class="footer">
+  <p>Fixture footer — far below the fold on purpose.</p>
+  <button type="button" id="delete-everything">Delete all records</button>
+  <button type="button" id="frozen" disabled>Disabled control</button>
+</footer>
+
+<script src="./app.js"></script>
+</body>
+</html>
