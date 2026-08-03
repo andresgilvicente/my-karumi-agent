@@ -1,0 +1,10 @@
+{
+  "name": "karumi-agent-injected",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Build the injectable page-side bundle (Pipecat a11y walker + Karumi overlay).",
+  "type": "module",
+  "scripts": { "build": "node build.mjs" },
+  "dependencies": { "@pipecat-ai/client-js": "1.13.0" },
+  "devDependencies": { "esbuild": "0.25.10" }
+}
