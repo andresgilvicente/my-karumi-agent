@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+.venv/
+.env
+node_modules/
+logs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+!src/karumi_agent/browser/injected/dist/
