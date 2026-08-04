@@ -1,9 +1,49 @@
 # Project state
 
-Updated at the end of each phase. Machine for all measurements unless stated:
+**Development strategy changed after the first delivery.** The whole agent was
+built in one pass; its automated tests passed and the product still did not work
+on real hardware. The project is now being recovered through small vertical
+milestones, each validated by the operator on their own machine before the next
+begins. See `docs/MILESTONES.md`.
+
+Machine for all measurements unless stated:
 **AMD Ryzen 7 5700U, 8C/16T, no GPU, 18 GB RAM, WSL2 Ubuntu 24.04, Python 3.12.**
 
-## Phase status
+## Milestone ledger
+
+Only the operator closes a milestone. Automated tests are a precondition, never
+the evidence.
+
+| Milestone | Automated | Operator validated | Committed |
+|---|---|---|---|
+| 0. Diagnostic console | yes (40 tests) | **pending** | no |
+| 1. Browser only | — | — | — |
+| 2. Text agent | — | — | — |
+| 3. TTS only | — | — | — |
+| 4. Microphone + STT only | — | — | — |
+| 5. Voice conversation | — | — | — |
+| 6. First vertical slice | — | — | — |
+| 7. Expanded browser capabilities | — | — | — |
+| 8. Autonomous tour | — | — | — |
+| 9. Generic URL learning | — | — | — |
+
+## Unvalidated modules
+
+Built during the first pass, never confirmed on hardware by a human. They remain
+in the tree, **unwired from the product flow**, and are re-enabled one milestone
+at a time. Reachable for development via `karumi dev`.
+
+| Module | What is genuinely unproven | Milestone |
+|---|---|---|
+| `agent/voice.py` | Only ever run with synthesized audio and a synthetic aiortc track. No physical microphone, no audible output, no barge-in with real speech. | 4-5 |
+| `agent/session.py` `start()` | Does seven things in one call before serving. The direct cause of "nothing happens". Being decomposed. | 1-2 |
+| `agent/knowledge.py` | Parsing has unit tests; the crawl has never run in a real demo. | 9 |
+| `planner.next_tour_beat` | Never run end to end with a human present. | 8 |
+| `browser/overlay.js` | Tested for presence in the DOM. Its visual states have never been seen. | 1 |
+| `bench.py` | Works; a distraction during recovery. | 7 |
+| `server/app.py` | The pre-recovery console. Superseded by `server/console.py`; kept so its regression tests still run. | 5 |
+
+## Phase status (first delivery, superseded by the milestone ledger)
 
 | Phase | State | Notes |
 |---|---|---|
@@ -142,3 +182,19 @@ No API key is requested at any point, and `.env.example` contains none.
 
 Run everything: `uv run pytest`. Skip hardware-dependent suites:
 `uv run pytest -m "not requires_browser and not requires_model"`.
+
+## Milestone 0 — measured
+
+Console startup, this machine:
+
+```
+build_app          7.5 ms
+first byte       239.0 ms
+GET /api/diag    306.1 ms   (11 cheap checks)
+heavy modules loaded at startup: NONE
+```
+
+`GET /api/diag` performs filesystem and environment reads plus one small HTTP
+GET to Ollama's `/api/tags`. It loads no model, launches no browser and
+generates nothing; a test asserts that `onnx_asr`, `kokoro_onnx` and
+`faster_whisper` are never imported by it.

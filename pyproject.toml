@@ -95,7 +95,7 @@ show_error_codes = true
 # Third-party packages without shipped stubs. Keeping this list explicit and
 # short makes it obvious when we start depending on something untyped.
 [[tool.mypy.overrides]]
-module = ["pipecat.*", "onnx_asr.*", "kokoro_onnx.*", "uvicorn.*"]
+module = ["pipecat.*", "onnx_asr.*", "kokoro_onnx.*", "uvicorn.*", "faster_whisper.*"]
 ignore_missing_imports = true
 
 # ---------------------------------------------------------------------------

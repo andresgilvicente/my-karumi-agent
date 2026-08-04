@@ -6,7 +6,6 @@ what is present, what is missing, and the exact command to fix each gap.
 
 from __future__ import annotations
 
-import contextlib
 import sys
 
 import typer
@@ -120,8 +119,8 @@ def fixture(
     server = FixtureServer(port=port)
     url = server.start()
     console.print(f"Hostile fixture serving at [cyan]{url}[/cyan]")
-    console.print("Point a demo at it with:")
-    console.print(f"  [white]uv run karumi demo --url {url}[/white]")
+    console.print("Then open the console and use this URL in its URL field:")
+    console.print("  [white]uv run karumi demo[/white]")
     console.print("\nPress Ctrl+C to stop.")
     try:
         import time as _time
@@ -133,15 +132,106 @@ def fixture(
 
 
 @app.command()
-def chat(
-    url: str = typer.Option(None, help="URL to demo. Defaults to the configured one."),
-    headless: bool = typer.Option(False, help="Hide the browser. Off for a real demo."),
+def demo(
+    port: int = typer.Option(None, help="Port for the operator console."),
 ) -> None:
-    """Drive the agent by typing instead of speaking.
+    """Open the operator console.
 
-    The fastest way to see the whole loop -- observation, planning, action,
-    verification -- without audio in the way.
+    Milestone 0: this serves the diagnostic console and does nothing else. It
+    launches no browser and loads no model until you click a Test button. That
+    is deliberate -- the previous version started everything at once, so any one
+    failure looked exactly like nothing happening.
     """
+    import asyncio
+
+    import uvicorn
+
+    from karumi_agent.server.console import build_console_app
+
+    settings = _bootstrap_settings()
+    if port is not None:
+        settings.server.port = port
+
+    url = f"http://{settings.server.host}:{settings.server.port}"
+    api = build_console_app(settings)
+
+    console.print(f"\n[bold]Operator console:[/bold] [cyan]{url}[/cyan]")
+    console.print(
+        "[dim]Open that in your browser. On WSL2 use your Windows browser and "
+        "the localhost address -- it owns the microphone and counts as a\n"
+        "secure context, which a LAN IP does not.[/dim]"
+    )
+    console.print("[dim]Nothing is started until you press a Test button. Ctrl+C to stop.[/dim]\n")
+
+    config = uvicorn.Config(
+        api, host=settings.server.host, port=settings.server.port, log_level="warning"
+    )
+    try:
+        asyncio.run(uvicorn.Server(config).serve())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Console stopped.[/yellow]")
+
+
+def _run_bench(*, url: str | None, turns: int, json_output: bool) -> None:
+    """Benchmark implementation, shared by `karumi dev bench`."""
+    import asyncio
+
+    from karumi_agent.bench import run_benchmark
+
+    settings = _bootstrap_settings()
+    result = asyncio.run(run_benchmark(settings, url=url, repetitions=turns))
+
+    if json_output:
+        import json
+
+        console.print_json(json.dumps(result.as_dict()))
+        return
+
+    console.print(f"\n[bold]Benchmark[/bold]  model={result.model}")
+    console.print(f"[dim]{result.machine}[/dim]\n")
+    table = Table(show_header=True, header_style="bold", box=None)
+    table.add_column("Stage", style="cyan")
+    for column in ("n", "P50", "P90", "P95", "min", "max"):
+        table.add_column(column, justify="right")
+    for stage, stats in result.stages.items():
+        table.add_row(
+            stage,
+            str(stats["count"]),
+            f"{stats['p50']:.2f}",
+            f"{stats['p90']:.2f}",
+            f"{stats['p95']:.2f}",
+            f"{stats['min']:.2f}",
+            f"{stats['max']:.2f}",
+        )
+    console.print(table)
+    console.print(
+        f"\nturns={result.turns}  verified={result.verified}  invalid_refs={result.invalid_refs}"
+    )
+    for note in result.notes:
+        console.print(f"[dim]{note}[/dim]")
+
+
+# ---------------------------------------------------------------------------
+# Development commands.
+#
+# Kept working and reachable, but out of the product flow: during the milestone
+# recovery there must be exactly one obvious way to run the agent. These drive
+# code paths that have not yet been validated on hardware.
+# ---------------------------------------------------------------------------
+dev = typer.Typer(
+    name="dev",
+    help="Development and diagnostic commands (not part of the product flow).",
+    no_args_is_help=True,
+)
+app.add_typer(dev)
+
+
+@dev.command("chat")
+def dev_chat(
+    url: str = typer.Option(None, help="URL to open. Defaults to the configured one."),
+    headless: bool = typer.Option(False, help="Hide the browser."),
+) -> None:
+    """Drive the agent by typing. Unvalidated on hardware; see docs/PROJECT_STATE.md."""
     import asyncio
 
     from karumi_agent.agent.session import DemoSession
@@ -193,133 +283,14 @@ def chat(
     asyncio.run(run())
 
 
-@app.command()
-def demo(
-    url: str = typer.Option(None, help="URL to demo. Defaults to the configured one."),
-    autonomous: bool = typer.Option(False, help="Start the self-guided tour immediately."),
-    headless: bool = typer.Option(False, help="Hide the browser. Off for a real demo."),
-    port: int = typer.Option(None, help="Port for the operator console."),
-) -> None:
-    """Run the voice demo: real browser plus an operator console with a mic."""
-    import asyncio
-
-    import uvicorn
-
-    from karumi_agent.agent.session import DemoSession
-    from karumi_agent.metrics.timeline import Timeline
-    from karumi_agent.server.app import build_app
-
-    settings = _bootstrap_settings()
-    if port is not None:
-        settings.server.port = port
-    timeline = Timeline(path=settings.state_dir / "logs" / "latency.jsonl")
-
-    async def run() -> None:
-        session = DemoSession(settings, url=url, timeline=timeline, headless=headless)
-        console.print("[dim]Starting browser, warming the model, learning the site...[/dim]")
-        await session.start(on_speech=lambda t: console.print(f"[green]agent[/green] {t}"))
-
-        console.print(
-            f"\n[bold]Operator console:[/bold] "
-            f"[cyan]http://{settings.server.host}:{settings.server.port}[/cyan]"
-        )
-        console.print("[dim]Open it, click 'Start talking', and share the Chromium window.[/dim]")
-        console.print("[dim]Press Ctrl+C to end the demo.[/dim]\n")
-
-        api = build_app(settings, session)
-        config = uvicorn.Config(
-            api,
-            host=settings.server.host,
-            port=settings.server.port,
-            log_level="warning",
-        )
-        server = uvicorn.Server(config)
-
-        if autonomous:
-            asyncio.create_task(_autonomous_loop(session))  # noqa: RUF006
-
-        try:
-            await server.serve()
-        finally:
-            # Stop the voice pipeline before the browser: a running pipeline
-            # keeps the loop busy and makes Ctrl+C look like a hang.
-            close_voice = getattr(api.state, "close_voice", None)
-            if close_voice is not None:
-                with contextlib.suppress(Exception):
-                    await close_voice()
-            await session.stop()
-
-    try:
-        asyncio.run(run())
-    except KeyboardInterrupt:
-        console.print("\n[yellow]Demo ended.[/yellow]")
-
-
-async def _autonomous_loop(session: object) -> None:
-    """Walk the page unattended until someone interrupts.
-
-    Beats come from the live page, never from a script; the pause between them
-    is what leaves room for a question.
-    """
-    import asyncio
-
-    await asyncio.sleep(2.0)
-    for _ in range(12):
-        try:
-            turn = await session.next_tour_beat()  # type: ignore[attr-defined]
-            console.print(f"[green]agent[/green] {turn.say}")
-        except Exception as exc:  # the tour is best effort
-            console.print(f"[dim]tour stopped: {exc}[/dim]")
-            return
-        await asyncio.sleep(6.0)
-
-
-@app.command()
-def bench(
+@dev.command("bench")
+def dev_bench(
     url: str = typer.Option(None, help="URL to benchmark against. Defaults to the fixture."),
     turns: int = typer.Option(3, help="Repetitions of the question set."),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
 ) -> None:
-    """Measure latency and report P50/P90/P95.
-
-    Runs against the local fixture by default so the numbers are reproducible and
-    need no network.
-    """
-    import asyncio
-
-    from karumi_agent.bench import run_benchmark
-
-    settings = _bootstrap_settings()
-    result = asyncio.run(run_benchmark(settings, url=url, repetitions=turns))
-
-    if json_output:
-        import json
-
-        console.print_json(json.dumps(result.as_dict()))
-        return
-
-    console.print(f"\n[bold]Benchmark[/bold]  model={result.model}")
-    console.print(f"[dim]{result.machine}[/dim]\n")
-    table = Table(show_header=True, header_style="bold", box=None)
-    table.add_column("Stage", style="cyan")
-    for column in ("n", "P50", "P90", "P95", "min", "max"):
-        table.add_column(column, justify="right")
-    for stage, stats in result.stages.items():
-        table.add_row(
-            stage,
-            str(stats["count"]),
-            f"{stats['p50']:.2f}",
-            f"{stats['p90']:.2f}",
-            f"{stats['p95']:.2f}",
-            f"{stats['min']:.2f}",
-            f"{stats['max']:.2f}",
-        )
-    console.print(table)
-    console.print(
-        f"\nturns={result.turns}  verified={result.verified}  invalid_refs={result.invalid_refs}"
-    )
-    for note in result.notes:
-        console.print(f"[dim]{note}[/dim]")
+    """Measure latency and report P50/P90/P95. Unvalidated on hardware."""
+    _run_bench(url=url, turns=turns, json_output=json_output)
 
 
 @app.command()

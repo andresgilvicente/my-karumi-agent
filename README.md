@@ -102,84 +102,57 @@ Nothing large is fetched without you asking for it.
 
 ## Run
 
-### Voice demo
+> **Recovery in progress.** This project is being revalidated milestone by
+> milestone after its first delivery passed its tests but failed on real
+> hardware. **Milestone 0 (diagnostic console) is implemented and awaiting
+> hardware validation.** See [`docs/MILESTONES.md`](docs/MILESTONES.md).
 
 ```bash
 uv run karumi demo
 ```
 
-Two windows open:
+Then open **http://localhost:7860**. On WSL2 use your **Windows** browser and
+the `localhost` address: it owns the microphone and counts as a secure context,
+which a LAN IP does not.
 
-* **Chromium** — the real site. *This* is the window to screen-share.
-* **Operator console** at `http://127.0.0.1:7860` — click **Start talking** and
-  allow the microphone. It also shows captions and live latency, and takes typed
-  input if you have no microphone.
+The console starts in about a quarter of a second and **does nothing until you
+ask it to**. No browser launches, no model loads. Each subsystem has its own
+Test button, so a failure points at one thing instead of appearing as silence.
 
-Then just talk: *"What does this page show?"*, *"Show me the conversion rate"*,
-*"Take me to the analytics section"*, *"Give me a tour"*.
+| Control | What it proves |
+|---|---|
+| **Test browser** | A headed Chromium opens and closes |
+| **Test LLM** | The local model generates, with time-to-first-token |
+| **Test failure path** | An unreachable Ollama is *reported*, not hidden |
+| **Test TTS** | You hear an English sentence through your speakers |
+| **Test microphone** | Permission, live level meter, and guaranteed release |
+| **Test STT** | Your real speech comes back as text |
+| **Download diagnostics JSON** | Every status, detail, remedy and timing, for sharing |
 
-The header pill tells you where you are: **microphone off** → **connecting…** →
-**listening — just talk**. If anything fails it says so in the conversation
-panel rather than sitting there quietly.
+The first **Test TTS** or **Test STT** downloads model weights (~337 MB and
+~670 MB) and can take several minutes; the row shows elapsed time while it works.
 
-**Easiest first run** — no sign-in, no network, everything local:
+Later milestones add opening a website, the text agent, and voice.
 
-```bash
-uv run karumi demo --url "$(uv run karumi fixture --port 8123 &>/dev/null & sleep 1; echo http://127.0.0.1:8123)"
-```
+### Development commands
 
-or, in two terminals:
-
-```bash
-uv run karumi fixture --port 8123     # terminal 1
-uv run karumi demo --url http://127.0.0.1:8123   # terminal 2
-```
-
-```bash
-uv run karumi demo --url https://www.karumi.ai   # any URL
-uv run karumi demo --autonomous                  # start the tour immediately
-```
-
-### The Metric Master Suite demo
+Not part of the product flow, and driving code paths not yet validated on
+hardware:
 
 ```bash
-uv run karumi demo --url https://metric-master-suite505.apps.rebolt.ai/
+uv run karumi doctor      # terminal diagnostics
+uv run karumi fixture     # offline hostile test site
+uv run karumi dev chat    # typed agent loop
+uv run karumi dev bench   # latency P50/P90/P95
 ```
 
-That site **requires signing in** — that is the site's own login, not something
-this project adds. The agent notices it generically, tells you, and **carries on
-regardless**: you can still ask about what is on screen, run the tour, or point
-it somewhere else. Sign in *in the Chromium window* whenever you like and it
-picks up from there. It never types a credential itself, and the browser profile
-is persistent, so you only do this once.
-
-If you would rather not deal with a login at all, point the demo anywhere else:
+### Tests
 
 ```bash
-uv run karumi demo --url https://www.karumi.ai
+uv run pytest                                  # everything
+uv run pytest tests/integration/test_diagnostics.py   # milestone 0
+uv run ruff check . && uv run mypy --strict src
 ```
-
-### Without audio
-
-```bash
-uv run karumi chat          # type instead of speaking; same loop
-uv run karumi fixture       # serve the offline hostile test site
-```
-
-### Tests, benchmark, diagnostics
-
-```bash
-uv run karumi doctor                                  # what is installed
-uv run karumi bench                                   # latency, P50/P90/P95
-uv run pytest                                         # everything
-uv run pytest -m "not requires_model"                 # skip model-dependent tests
-uv run ruff check . && uv run mypy --strict src       # lint and types
-```
-
-Tests needing hardware or models are marked and **skip with a stated reason**
-rather than passing quietly.
-
----
 
 ## Configuration
 

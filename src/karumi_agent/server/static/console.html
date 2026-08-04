@@ -1,0 +1,530 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karumi Agent — diagnostics</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b1220; --panel:#111b2e; --line:#22304a;
+          --text:#e6edf7; --dim:#93a4c0; --accent:#3b82f6; --ok:#10b981;
+          --warn:#f59e0b; --err:#ef4444; --unknown:#64748b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  header { padding:16px 22px; border-bottom:1px solid var(--line);
+           display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0; font-weight:650; }
+  .tag { font-size:12px; color:var(--dim); border:1px solid var(--line);
+         padding:3px 9px; border-radius:999px; }
+  main { padding:22px; max-width:1000px; margin:0 auto; display:grid; gap:18px; }
+  .panel { background:var(--panel); border:1px solid var(--line);
+           border-radius:14px; padding:18px; }
+  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.09em;
+              color:var(--dim); margin:0 0 14px; font-weight:600;
+              display:flex; justify-content:space-between; align-items:center; }
+  table { width:100%; border-collapse:collapse; }
+  td { padding:9px 8px; border-top:1px solid var(--line); vertical-align:top; }
+  tr:first-child td { border-top:none; }
+  td.s { width:26px; }
+  td.n { width:190px; font-weight:550; white-space:nowrap; }
+  td.a { width:170px; text-align:right; }
+  .dot { display:inline-block; width:9px; height:9px; border-radius:50%;
+         background:var(--unknown); }
+  .dot.ok { background:var(--ok); } .dot.warn { background:var(--warn); }
+  .dot.fail { background:var(--err); }
+  .dot.busy { background:var(--accent); animation:pulse 1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+  .detail { white-space:pre-wrap; word-break:break-word; }
+  .remedy { color:var(--warn); font-size:13px; margin-top:5px; }
+  .ms { color:var(--dim); font-size:12px; margin-top:4px; }
+  .side { color:var(--dim); font-size:11px; font-weight:400; display:block; }
+  button { padding:7px 13px; border-radius:8px; border:1px solid var(--line);
+           background:var(--accent); color:#fff; font:inherit; font-size:13px;
+           font-weight:550; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--text); }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  #log { font:12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+         max-height:220px; overflow-y:auto; white-space:pre-wrap;
+         color:var(--dim); }
+  #log b { color:var(--text); font-weight:600; }
+  .meter { height:8px; background:#0d1729; border-radius:99px; overflow:hidden;
+           margin-top:8px; border:1px solid var(--line); }
+  .meter > i { display:block; height:100%; width:0%; background:var(--ok);
+               transition:width 80ms linear; }
+  .note { color:var(--dim); font-size:13px; margin:12px 0 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Karumi Agent</h1>
+  <span class="tag">milestone 0 — diagnostics</span>
+  <span class="tag" id="origin-tag">checking origin…</span>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>
+      Systems
+      <span>
+        <button class="ghost" id="refresh-btn">Refresh</button>
+        <button class="ghost" id="export-btn">Download diagnostics JSON</button>
+      </span>
+    </h2>
+    <table id="rows"></table>
+    <p class="note">
+      Nothing heavy runs until you press a Test button. The first
+      <b>Test&nbsp;TTS</b> or <b>Test&nbsp;STT</b> downloads model weights
+      (~337&nbsp;MB and ~670&nbsp;MB) and can take several minutes; the row shows
+      elapsed time while it works.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Activity</h2>
+    <div id="log">Console ready. No browser launched, no model loaded.</div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+/* ------------------------------------------------------------------ state */
+// key -> {status, detail, remedy, elapsed_ms}
+const model = new Map();
+let busy = false;
+
+const ORDER = [
+  'console origin', 'microphone', 'webrtc',
+  'chromium', 'page', 'display',
+  'ollama', 'llm',
+  'stt', 'tts', 'speech weights', 'espeak-ng',
+  'memory', 'disk', 'cuda',
+];
+
+const LABELS = {
+  'console origin': ['Console origin', 'browser'],
+  'microphone':     ['Microphone', 'browser · your hardware'],
+  'webrtc':         ['WebRTC support', 'browser'],
+  'chromium':       ['Chromium', 'server'],
+  'page':           ['Page', 'server'],
+  'display':        ['Display', 'server'],
+  'ollama':         ['Ollama service', 'server'],
+  'llm':            ['LLM generation', 'server · probe'],
+  'stt':            ['Speech recognition', 'server · probe'],
+  'tts':            ['Speech synthesis', 'server · probe'],
+  'speech weights': ['Speech weights', 'server'],
+  'espeak-ng':      ['espeak-ng', 'server'],
+  'memory':         ['Memory', 'server'],
+  'disk':           ['Disk', 'server'],
+  'cuda':           ['CUDA', 'server'],
+};
+
+// Which rows carry a Test button, and any extra control.
+const TESTS = {
+  'chromium':   [{label:'Test browser', run:() => testBrowser()}],
+  'llm':        [{label:'Test LLM', run:() => testLLM(false)},
+                 {label:'Test failure path', ghost:true, run:() => testLLM(true)}],
+  'tts':        [{label:'Test TTS', run:() => testTTS()}],
+  'stt':        [{label:'Test STT', run:() => testSTT()}],
+  'microphone': [{label:'Test microphone', run:() => testMic()}],
+};
+
+function set(key, status, detail, remedy, elapsed_ms) {
+  model.set(key, {status, detail, remedy, elapsed_ms});
+  render();
+}
+
+function log(msg, strong) {
+  const time = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.innerHTML = `${time}  ${strong ? '<b>' + msg + '</b>' : msg}`;
+  $('log').appendChild(line);
+  $('log').scrollTop = $('log').scrollHeight;
+}
+
+/* ----------------------------------------------------------------- render */
+function render() {
+  const table = $('rows');
+  table.innerHTML = '';
+  const keys = [...new Set([...ORDER, ...model.keys()])];
+  for (const key of keys) {
+    const entry = model.get(key);
+    if (!entry && !LABELS[key]) continue;
+    const [label, side] = LABELS[key] || [key, 'server'];
+    const st = entry ? entry.status : 'unknown';
+
+    const tr = document.createElement('tr');
+
+    const dot = document.createElement('td');
+    dot.className = 's';
+    dot.innerHTML = `<span class="dot ${st}"></span>`;
+
+    const name = document.createElement('td');
+    name.className = 'n';
+    name.innerHTML = `${label}<span class="side">${side}</span>`;
+
+    const detail = document.createElement('td');
+    const text = document.createElement('div');
+    text.className = 'detail';
+    text.textContent = entry ? entry.detail : 'not checked yet';
+    detail.appendChild(text);
+    if (entry && entry.remedy && st !== 'ok') {
+      const rem = document.createElement('div');
+      rem.className = 'remedy';
+      rem.textContent = '→ ' + entry.remedy;
+      detail.appendChild(rem);
+    }
+    if (entry && entry.elapsed_ms) {
+      const ms = document.createElement('div');
+      ms.className = 'ms';
+      ms.textContent = (entry.elapsed_ms / 1000).toFixed(2) + 's';
+      detail.appendChild(ms);
+    }
+    if (key === 'microphone') {
+      const meter = document.createElement('div');
+      meter.className = 'meter';
+      meter.innerHTML = '<i id="mic-meter"></i>';
+      detail.appendChild(meter);
+    }
+
+    const actions = document.createElement('td');
+    actions.className = 'a';
+    for (const test of (TESTS[key] || [])) {
+      const b = document.createElement('button');
+      b.textContent = test.label;
+      if (test.ghost) b.className = 'ghost';
+      b.style.marginLeft = '6px';
+      b.disabled = busy;
+      b.onclick = test.run;
+      actions.appendChild(b);
+    }
+
+    tr.append(dot, name, detail, actions);
+    table.appendChild(tr);
+  }
+}
+
+/* --------------------------------------------------------- browser checks */
+function checkOrigin() {
+  const secure = window.isSecureContext;
+  const host = location.hostname;
+  const isLocal = ['localhost', '127.0.0.1', '::1'].includes(host);
+  $('origin-tag').textContent = location.origin;
+  if (secure && isLocal) {
+    set('console origin', 'ok', `${location.origin} — secure context, microphone allowed`);
+  } else if (secure) {
+    set('console origin', 'warn', `${location.origin} — secure context, but not localhost`);
+  } else {
+    set('console origin', 'fail',
+        `${location.origin} — NOT a secure context, so the microphone API does not exist here`,
+        'Open the console at http://localhost:7860 (a LAN IP will not work).');
+  }
+}
+
+function checkWebRTC() {
+  const has = typeof RTCPeerConnection !== 'undefined';
+  const media = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+  if (has && media) {
+    set('webrtc', 'ok', 'RTCPeerConnection and getUserMedia are available (not exercised until milestone 5)');
+  } else {
+    set('webrtc', 'fail', `RTCPeerConnection: ${has}, getUserMedia: ${media}`,
+        'Use a current Chrome, Edge or Firefox over localhost.');
+  }
+}
+
+/* ------------------------------------------------------------- server API */
+async function poll() {
+  try {
+    const r = await fetch('/api/diag');
+    const d = await r.json();
+    for (const c of d.checks) {
+      if (c.name.startsWith('model:')) {
+        LABELS[c.name] = ['Model ' + c.name.slice(6), 'server'];
+      }
+      set(c.name, c.status, c.detail, c.remedy);
+    }
+    for (const [name, p] of Object.entries(d.probes || {})) {
+      set(name, p.status, p.detail, p.remedy, p.elapsed_ms);
+    }
+  } catch (e) {
+    log('could not reach the console API: ' + e.message);
+  }
+}
+
+async function withBusy(key, label, fn) {
+  if (busy) return;
+  busy = true;
+  const started = Date.now();
+  set(key, 'busy', label + '…');
+  const tick = setInterval(
+    () => set(key, 'busy', `${label}… ${((Date.now() - started) / 1000).toFixed(0)}s`), 1000);
+  log(label + '…', true);
+  try {
+    await fn();
+  } catch (e) {
+    set(key, 'fail', e.message || String(e));
+    log('FAILED: ' + (e.message || e));
+  } finally {
+    clearInterval(tick);
+    busy = false;
+    render();
+  }
+}
+
+function testBrowser() {
+  return withBusy('chromium', 'Launching Chromium', async () => {
+    const r = await fetch('/api/diag/browser', {method: 'POST'});
+    const d = await r.json();
+    set('chromium', d.status, d.detail, d.remedy, d.elapsed_ms);
+    log('browser: ' + d.detail);
+  });
+}
+
+function testLLM(simulate) {
+  const label = simulate ? 'Testing the LLM failure path' : 'Asking the local model';
+  return withBusy('llm', label, async () => {
+    const r = await fetch('/api/diag/llm', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({simulate_unreachable: !!simulate}),
+    });
+    const d = await r.json();
+    if (simulate) {
+      const good = d.status === 'fail';
+      set('llm', good ? 'ok' : 'fail',
+          good ? 'Failure path verified — an unreachable Ollama is reported, not hidden: ' + d.detail
+               : 'Expected a failure but got: ' + d.detail,
+          good ? null : 'The probe should fail when Ollama is unreachable.',
+          d.elapsed_ms);
+      log('llm failure path: ' + d.detail);
+    } else {
+      set('llm', d.status, d.detail, d.remedy, d.elapsed_ms);
+      log('llm: ' + d.detail);
+    }
+  });
+}
+
+function testTTS() {
+  return withBusy('tts', 'Synthesizing speech', async () => {
+    const r = await fetch('/api/diag/tts', {method: 'POST'});
+    if (!r.ok) {
+      const d = await r.json();
+      set('tts', d.status || 'fail', d.detail, d.remedy, d.elapsed_ms);
+      log('tts: ' + d.detail);
+      return;
+    }
+    const detail = r.headers.get('X-Probe-Detail') || 'audio produced';
+    const ms = parseFloat(r.headers.get('X-Probe-Elapsed-Ms') || '0');
+    const blob = await r.blob();
+    const audio = new Audio(URL.createObjectURL(blob));
+    try {
+      await audio.play();
+      set('tts', 'ok', detail + ' — you should hear it now', null, ms);
+      log('tts: playing ' + Math.round(blob.size / 1024) + ' KB of audio');
+    } catch (e) {
+      set('tts', 'warn', detail + ' — but the browser blocked playback',
+          'Click anywhere on this page, then press Test TTS again.', ms);
+    }
+  });
+}
+
+/* --------------------------------------------------- microphone (browser) */
+/**
+ * Run `fn` with a live microphone, and ALWAYS release the hardware afterwards:
+ * every track stopped, the AudioContext closed, on success, cancel or error.
+ * A diagnostic that leaves the microphone open is worse than no diagnostic.
+ */
+async function withMicrophone(fn) {
+  let stream = null, ctx = null, source = null, node = null;
+  try {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      throw new Error('getUserMedia is unavailable — the page is not a secure context');
+    }
+    stream = await navigator.mediaDevices.getUserMedia({
+      audio: {channelCount: 1, echoCancellation: true, noiseSuppression: true},
+    });
+    ctx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: 16000});
+    source = ctx.createMediaStreamSource(stream);
+    node = ctx.createScriptProcessor(4096, 1, 1);
+    source.connect(node);
+    // Required for the processor to run in some browsers; gain 0 so nothing
+    // is echoed back to the speakers.
+    const mute = ctx.createGain();
+    mute.gain.value = 0;
+    node.connect(mute);
+    mute.connect(ctx.destination);
+    return await fn({ctx, node});
+  } finally {
+    try { if (node) { node.onaudioprocess = null; node.disconnect(); } } catch (e) {}
+    try { if (source) source.disconnect(); } catch (e) {}
+    try { if (ctx && ctx.state !== 'closed') await ctx.close(); } catch (e) {}
+    try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+    const meter = document.getElementById('mic-meter');
+    if (meter) meter.style.width = '0%';
+    log('microphone released');
+  }
+}
+
+function testMic() {
+  return withBusy('microphone', 'Listening (speak now)', async () => {
+    let peak = 0, frames = 0;
+    let devices = [];
+    try {
+      devices = (await navigator.mediaDevices.enumerateDevices())
+        .filter(d => d.kind === 'audioinput');
+    } catch (e) { /* labels need permission; count is enough */ }
+
+    await withMicrophone(async ({ctx, node}) => {
+      await new Promise((resolve) => {
+        node.onaudioprocess = (e) => {
+          const buf = e.inputBuffer.getChannelData(0);
+          let localPeak = 0;
+          for (let i = 0; i < buf.length; i++) {
+            const v = Math.abs(buf[i]);
+            if (v > localPeak) localPeak = v;
+          }
+          if (localPeak > peak) peak = localPeak;
+          frames++;
+          const meter = document.getElementById('mic-meter');
+          if (meter) meter.style.width = Math.min(100, localPeak * 140).toFixed(0) + '%';
+        };
+        setTimeout(resolve, 5000);
+      });
+    });
+
+    const pct = (peak * 100).toFixed(0);
+    if (peak < 0.01) {
+      set('microphone', 'fail',
+          `captured ${frames} audio blocks but the signal never rose above ${pct}% — silence`,
+          'Check the microphone is not muted and is selected as the default input device.');
+    } else {
+      set('microphone', 'ok',
+          `working — peak level ${pct}%, ${devices.length || 'unknown'} input device(s). Microphone released.`);
+    }
+    log(`microphone: peak ${pct}%, ${frames} blocks`);
+  });
+}
+
+function testSTT() {
+  return withBusy('stt', 'Recording 4 seconds (speak now)', async () => {
+    const chunks = [];
+    let rate = 16000;
+
+    await withMicrophone(async ({ctx, node}) => {
+      rate = ctx.sampleRate;
+      await new Promise((resolve) => {
+        node.onaudioprocess = (e) => {
+          chunks.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+          const meter = document.getElementById('mic-meter');
+          if (meter) {
+            let p = 0;
+            const b = e.inputBuffer.getChannelData(0);
+            for (let i = 0; i < b.length; i++) p = Math.max(p, Math.abs(b[i]));
+            meter.style.width = Math.min(100, p * 140).toFixed(0) + '%';
+          }
+        };
+        setTimeout(resolve, 4000);
+      });
+    });
+
+    let samples = flatten(chunks);
+    if (rate !== 16000) samples = resample(samples, rate, 16000);
+    const wav = encodeWav(samples, 16000);
+    log(`recorded ${(samples.length / 16000).toFixed(1)}s, uploading ${Math.round(wav.byteLength / 1024)} KB`);
+
+    set('stt', 'busy', 'Transcribing…');
+    const r = await fetch('/api/diag/stt', {
+      method: 'POST',
+      headers: {'Content-Type': 'audio/wav'},
+      body: wav,
+    });
+    const d = await r.json();
+    set('stt', d.status, d.detail, d.remedy, d.elapsed_ms);
+    log('stt: ' + d.detail);
+  });
+}
+
+/* --------------------------------------------------------- WAV in the browser */
+// Encoding here rather than using MediaRecorder is deliberate: MediaRecorder
+// emits webm/opus, which the server cannot decode without ffmpeg, and ffmpeg is
+// not a dependency of this project.
+function flatten(chunks) {
+  let total = 0;
+  for (const c of chunks) total += c.length;
+  const out = new Float32Array(total);
+  let offset = 0;
+  for (const c of chunks) { out.set(c, offset); offset += c.length; }
+  return out;
+}
+
+function resample(samples, from, to) {
+  if (from === to) return samples;
+  const ratio = from / to;
+  const out = new Float32Array(Math.floor(samples.length / ratio));
+  for (let i = 0; i < out.length; i++) {
+    const src = i * ratio;
+    const low = Math.floor(src), high = Math.min(low + 1, samples.length - 1);
+    out[i] = samples[low] + (samples[high] - samples[low]) * (src - low);
+  }
+  return out;
+}
+
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const str = (offset, s) => { for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i)); };
+  str(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  str(8, 'WAVE');
+  str(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);          // PCM
+  view.setUint16(22, 1, true);          // mono
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  str(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  let offset = 44;
+  for (let i = 0; i < samples.length; i++, offset += 2) {
+    const s = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+  return buffer;
+}
+
+/* --------------------------------------------------------------- export */
+$('export-btn').onclick = async () => {
+  const r = await fetch('/api/diag/export');
+  const server = await r.json();
+  // Merge in what only the browser knows.
+  server.browser = {
+    origin: location.origin,
+    secure_context: window.isSecureContext,
+    user_agent: navigator.userAgent,
+    rtc_peer_connection: typeof RTCPeerConnection !== 'undefined',
+    get_user_media: !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia),
+  };
+  server.browser_rows = {};
+  for (const key of ['console origin', 'microphone', 'webrtc']) {
+    if (model.has(key)) server.browser_rows[key] = model.get(key);
+  }
+  const blob = new Blob([JSON.stringify(server, null, 2)], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'karumi-diagnostics.json';
+  a.click();
+  log('diagnostics downloaded', true);
+};
+
+$('refresh-btn').onclick = () => { checkOrigin(); checkWebRTC(); poll(); };
+
+/* ----------------------------------------------------------------- start */
+checkOrigin();
+checkWebRTC();
+poll();
+setInterval(() => { if (!busy) poll(); }, 5000);
+</script>
+</body>
+</html>
