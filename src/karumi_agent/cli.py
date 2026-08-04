@@ -48,6 +48,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print the <ui_state> block exactly as the model would receive it.",
     )
 
+    text = sub.add_parser(
+        "text",
+        help="Phase 2: talk to the agent by typing. Same delegation path as voice.",
+    )
+    text.add_argument("--url", required=True, help="Page to demo.")
+    text.add_argument(
+        "--product",
+        help="Editorial briefing: a YAML path, or a name under config/products/.",
+    )
+    text.add_argument("--headless", action="store_true")
+    text.add_argument(
+        "--ask",
+        action="append",
+        help="Ask a question and exit. Repeatable; otherwise starts a prompt loop.",
+    )
+
     fixture = sub.add_parser(
         "serve-fixture", help="Serve the bundled test site on localhost."
     )
@@ -72,6 +88,56 @@ async def _run_spike(args: argparse.Namespace) -> int:
     )
     print(report.render())
     return 0 if report.passed else 1
+
+
+async def _run_text(args: argparse.Namespace) -> int:
+    from karumi_agent.providers.llm import MissingCredentialsError, create_llm
+    from karumi_agent.session import DemoSession, resolve_product
+
+    settings = get_settings()
+    browser = settings.browser.model_copy(
+        update={"headless": args.headless or settings.browser.headless}
+    )
+
+    try:
+        llm = create_llm()
+    except MissingCredentialsError as exc:
+        # Not a crash: the browser layer runs without credentials, and saying so
+        # plainly is more useful than a traceback from inside the SDK.
+        print(f"\n{exc}\n", file=sys.stderr)
+        return 2
+
+    product = resolve_product(args.product)
+    session = DemoSession(
+        url=args.url, llm=llm, browser_settings=browser, product=product
+    )
+
+    await session.start()
+    print(f"\nDemoing {args.url}")
+    if product.name:
+        print(f"Briefing: {product.name}")
+
+    try:
+        if args.ask:
+            for question in args.ask:
+                print(f"\n> {question}")
+                print(await session.ask(question))
+            return 0
+
+        print("Type a question, or an empty line to quit.\n")
+        while True:
+            try:
+                question = input("> ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print()
+                break
+            if not question:
+                break
+            print(await session.ask(question))
+    finally:
+        await session.close()
+
+    return 0
 
 
 def _serve_fixture(port: int) -> int:
@@ -104,6 +170,9 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "spike":
         return asyncio.run(_run_spike(args))
+
+    if args.command == "text":
+        return asyncio.run(_run_text(args))
 
     return 1
 
