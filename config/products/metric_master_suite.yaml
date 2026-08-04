@@ -1,0 +1,46 @@
+# Editorial briefing for the Stage 1 demo target.
+#
+# This file is intent, not implementation. It deliberately contains no CSS
+# selectors, no element ids, no routes and no fixed running order — the agent
+# discovers all of that from the live page. Everything here is the kind of thing
+# a human presenter would be briefed on before walking into the room.
+#
+# It is also the only content in the system the agent treats as trusted. Keep it
+# to claims the operator is genuinely willing to stand behind: whatever is
+# written here, the agent may say out loud.
+
+name: Metric Master Suite
+url: https://metric-master-suite505.apps.rebolt.ai/
+
+summary: >-
+  An analytics suite for tracking business metrics, with dashboards for
+  monitoring performance and tools for exploring the numbers behind them.
+
+goals:
+  - Give the visitor a clear sense of what the product does within the first minute.
+  - Show the product working on real screens rather than describing it abstractly.
+  - Follow the visitor's curiosity — their question is a better guide than any script.
+  - Leave them knowing which part of the product is relevant to their own work.
+
+highlights:
+  - The main dashboard, and what a first-time user is meant to notice on it.
+  - Wherever the headline metrics live, and what they are measuring.
+  - Any view that breaks the numbers down further than the summary does.
+  - Navigation between sections, so the shape of the product is visible.
+
+value_messages:
+  - The important numbers are visible without configuration or setup work.
+  - Moving from a summary to the detail behind it takes one step, not a report request.
+  - The interface is built to be read quickly rather than studied.
+
+authorised_facts: []
+  # Add only claims the operator can stand behind. Anything not listed here and
+  # not visible on screen must not be asserted — see avoid_claims below.
+
+avoid_claims:
+  - Specific pricing, plans or contract terms.
+  - Named customers, case studies or logos.
+  - Security, compliance or certification claims.
+  - Performance, scale or uptime figures that are not shown on screen.
+  - Comparisons with competitors by name.
+  - Roadmap items, release dates or features not visible in the product.
