@@ -66,3 +66,17 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 python_version = "3.11"
 strict = true
 files = ["src/karumi_agent"]
+
+# Pipecat and regex ship no type information. Silencing the import here keeps
+# strict mode meaningful for our own code instead of trading it away wholesale.
+[[tool.mypy.overrides]]
+module = ["pipecat.*", "regex.*", "yaml.*"]
+ignore_missing_imports = true
+
+# `@job` and `@tool` are Pipecat decorators with no annotations, so under strict
+# mode every handler they wrap is reported as untyped. The handlers themselves
+# are annotated; only the decorator is opaque. Scoped to the worker package so
+# the exemption cannot drift into code that has no such excuse.
+[[tool.mypy.overrides]]
+module = "karumi_agent.workers.*"
+disallow_untyped_decorators = false
