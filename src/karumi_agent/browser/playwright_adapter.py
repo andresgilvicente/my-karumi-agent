@@ -271,11 +271,25 @@ class PlaywrightBrowserAdapter:
     # -- observation -------------------------------------------------------
 
     async def _on_page_snapshot(self, source: dict[str, Any], raw: dict[str, Any]) -> None:
-        """Binding target: a frame pushed a new snapshot."""
+        """Binding target: a frame pushed a new snapshot.
+
+        Storing is not enough — the point of the walker streaming on mutation is
+        that observers hear about the page changing without having to ask. So a
+        pushed snapshot is published straight away, which is what keeps the UI
+        worker's `<ui_state>` current between turns.
+
+        Publishing is skipped until the main frame has been seen at least once:
+        a child frame that reports first would otherwise produce a snapshot of
+        an iframe with no page around it.
+        """
         frame = source.get("frame")
         if frame is None or not isinstance(raw, dict):
             return
+
         self._store_frame_snapshot(frame, raw)
+
+        if "f0" in self._frames:
+            self._publish()
 
     def _store_frame_snapshot(self, frame: Frame, raw: dict[str, Any]) -> None:
         frame_id = self._frame_id(frame)

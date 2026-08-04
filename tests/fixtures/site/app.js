@@ -225,11 +225,23 @@ document.addEventListener("click", (event) => {
   }
 });
 
-// A heartbeat that touches the DOM without changing structure. This is the
-// mutation pressure that would invalidate a naive snapshot-diffing scheme.
+// A heartbeat that keeps the DOM genuinely in motion on every view.
+//
+// This has to be a *structural* mutation, not an attribute tweak: accessibility
+// walkers observe childList/characterData, so a `dataset` write would leave the
+// tree quiet and the "page under mutation" claim untested. Replacing a text node
+// churns the tree the way a real app does, which is what makes the ref-stability
+// and snapshot-streaming tests mean something.
 setInterval(() => {
-  const badge = document.querySelector(".topbar h1");
-  if (badge) badge.dataset.tick = String(Date.now());
+  const bar = document.querySelector(".topbar");
+  if (!bar) return;
+  let stamp = document.getElementById("heartbeat");
+  if (stamp) stamp.remove();
+  stamp = document.createElement("span");
+  stamp.id = "heartbeat";
+  stamp.className = "heartbeat";
+  stamp.textContent = `updated ${new Date().toLocaleTimeString()}`;
+  bar.appendChild(stamp);
 }, 500);
 
 render(currentView);
