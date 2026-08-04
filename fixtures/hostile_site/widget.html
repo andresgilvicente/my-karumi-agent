@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Usage widget</title>
+<style>
+  body { margin:0; font:14px/1.4 ui-sans-serif, system-ui, sans-serif; padding:12px; }
+  h2 { font-size:13px; margin:0 0 6px; color:#475569; }
+  .value { font-size:22px; font-weight:650; }
+</style>
+</head>
+<body>
+  <h2>Storage used</h2>
+  <div class="value">42.7 GB</div>
+  <button id="widget-btn">Refresh usage</button>
+  <script>
+    document.getElementById('widget-btn').onclick = function () {
+      document.querySelector('.value').textContent = '43.1 GB';
+    };
+  </script>
+</body>
+</html>

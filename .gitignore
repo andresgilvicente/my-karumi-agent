@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+build/
+dist/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local configuration and run artifacts
+doctor.json
+.env
+*.jsonl
+artifacts/
+.karumi-state/
+
+# Node (control page assets, if any are ever built locally)
+node_modules/

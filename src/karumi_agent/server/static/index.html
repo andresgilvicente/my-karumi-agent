@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Karumi Agent — operator console</title>
+<style>
+  :root { color-scheme: dark; --bg:#0b1220; --panel:#111b2e; --line:#22304a;
+          --text:#e6edf7; --dim:#93a4c0; --accent:#3b82f6; --ok:#10b981;
+          --warn:#f59e0b; --err:#ef4444; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  header { padding:16px 22px; border-bottom:1px solid var(--line);
+           display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+  h1 { font-size:16px; margin:0; font-weight:650; letter-spacing:.2px; }
+  .pill { display:inline-flex; align-items:center; gap:7px; padding:5px 11px;
+          border-radius:999px; background:var(--panel); border:1px solid var(--line);
+          font-size:13px; color:var(--dim); }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--dim); }
+  .dot.on { background:var(--ok); }
+  .dot.busy { background:var(--warn); }
+  main { padding:22px; max-width:940px; margin:0 auto;
+         display:grid; gap:18px; grid-template-columns:1fr; }
+  .panel { background:var(--panel); border:1px solid var(--line);
+           border-radius:14px; padding:18px; }
+  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.09em;
+              color:var(--dim); margin:0 0 12px; font-weight:600; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; }
+  input[type=text] { flex:1; min-width:220px; padding:10px 13px; border-radius:9px;
+    border:1px solid var(--line); background:#0d1729; color:var(--text); font:inherit; }
+  button { padding:10px 16px; border-radius:9px; border:1px solid var(--line);
+    background:var(--accent); color:#fff; font:inherit; font-weight:550; cursor:pointer; }
+  button.secondary { background:transparent; color:var(--text); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  #transcript { max-height:320px; overflow-y:auto; display:flex;
+                flex-direction:column; gap:10px; }
+  .msg { padding:10px 13px; border-radius:10px; max-width:85%; white-space:pre-wrap; }
+  .msg.you { align-self:flex-end; background:#1d2c46; }
+  .msg.agent { align-self:flex-start; background:#0d1729; border:1px solid var(--line); }
+  .meta { font-size:12px; color:var(--dim); margin-top:5px; }
+  .meta .ok { color:var(--ok); } .meta .warn { color:var(--warn); }
+  .stats { display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:12px; }
+  .stat .k { font-size:12px; color:var(--dim); }
+  .stat .v { font-size:19px; font-weight:600; }
+  .hint { color:var(--dim); font-size:13px; margin-top:10px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Karumi Agent</h1>
+  <span class="pill"><span class="dot" id="mic-dot"></span><span id="mic-label">microphone off</span></span>
+  <span class="pill"><span class="dot" id="learn-dot"></span><span id="learn-label">not learning</span></span>
+  <span class="pill" id="page-pill">no page</span>
+</header>
+
+<main>
+  <section class="panel">
+    <h2>Session</h2>
+    <div class="row">
+      <button id="mic-btn">Start talking</button>
+      <button id="tour-btn" class="secondary">Autonomous tour</button>
+    </div>
+    <div class="row" style="margin-top:12px">
+      <input type="text" id="url-input" placeholder="Point the demo at any URL, e.g. https://www.karumi.ai">
+      <button id="go-btn" class="secondary">Go</button>
+    </div>
+    <p class="hint">
+      The real browser opens in its own window — share that window, not this one.
+      If the site asks you to sign in, do it there; the agent waits and never
+      types credentials itself.
+    </p>
+  </section>
+
+  <section class="panel">
+    <h2>Conversation</h2>
+    <div id="transcript"></div>
+    <div class="row" style="margin-top:12px">
+      <input type="text" id="text-input" placeholder="Or type instead of speaking…">
+      <button id="send-btn" class="secondary">Send</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Latency (this session)</h2>
+    <div class="stats">
+      <div class="stat"><div class="k">last turn</div><div class="v" id="s-last">—</div></div>
+      <div class="stat"><div class="k">median</div><div class="v" id="s-p50">—</div></div>
+      <div class="stat"><div class="k">slowest</div><div class="v" id="s-max">—</div></div>
+      <div class="stat"><div class="k">pages learned</div><div class="v" id="s-pages">0</div></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const turns = [];
+let pc = null, stream = null;
+
+function add(who, text, meta) {
+  const el = document.createElement('div');
+  el.className = 'msg ' + who;
+  el.textContent = text;
+  if (meta) {
+    const m = document.createElement('div');
+    m.className = 'meta';
+    m.innerHTML = meta;
+    el.appendChild(m);
+  }
+  $('transcript').appendChild(el);
+  $('transcript').scrollTop = $('transcript').scrollHeight;
+}
+
+function recordTurn(seconds) {
+  if (typeof seconds !== 'number') return;
+  turns.push(seconds);
+  const sorted = [...turns].sort((a, b) => a - b);
+  $('s-last').textContent = seconds.toFixed(1) + 's';
+  $('s-p50').textContent = sorted[Math.floor(sorted.length / 2)].toFixed(1) + 's';
+  $('s-max').textContent = sorted[sorted.length - 1].toFixed(1) + 's';
+}
+
+async function post(path, body) {
+  const r = await fetch(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body || {}),
+  });
+  let data = null;
+  try { data = await r.json(); } catch (e) { /* empty or non-JSON body */ }
+  if (!r.ok) {
+    // Surface the server's own explanation. Swallowing this is what made a
+    // failed voice connection look like nothing happening at all.
+    throw new Error((data && data.error) || `${path} failed (HTTP ${r.status})`);
+  }
+  return data;
+}
+
+async function send() {
+  const text = $('text-input').value.trim();
+  if (!text) return;
+  $('text-input').value = '';
+  add('you', text);
+  $('send-btn').disabled = true;
+  try {
+    const d = await post('/api/say', {text});
+    const bits = [];
+    if (d.action) bits.push(d.action);
+    if (d.action) bits.push(d.verified
+      ? '<span class="ok">verified</span>'
+      : '<span class="warn">not verified</span>');
+    if (d.seconds) bits.push(d.seconds + 's');
+    add('agent', d.say || '(no reply)', bits.join(' · '));
+    recordTurn(d.seconds);
+  } catch (e) {
+    add('agent', 'Request failed: ' + e);
+  } finally {
+    $('send-btn').disabled = false;
+  }
+}
+
+$('send-btn').onclick = send;
+$('text-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') send(); });
+
+$('tour-btn').onclick = async () => {
+  $('tour-btn').disabled = true;
+  try {
+    const d = await post('/api/tour');
+    add('agent', d.say || '(nothing to show)', d.seconds ? d.seconds + 's' : '');
+    recordTurn(d.seconds);
+  } catch (e) {
+    add('agent', 'The tour could not continue: ' + e.message);
+  } finally {
+    $('tour-btn').disabled = false;
+  }
+};
+
+$('go-btn').onclick = async () => {
+  const url = $('url-input').value.trim();
+  if (!url) return;
+  $('go-btn').disabled = true;
+  add('you', 'Open ' + url);
+  try {
+    const d = await post('/api/navigate', {url});
+    add('agent', 'Opening ' + (d.title || url) + ' and starting to learn it.');
+  } catch (e) {
+    add('agent', 'Could not open that: ' + e);
+  } finally {
+    $('go-btn').disabled = false;
+  }
+};
+
+function setMic(state, label) {
+  $('mic-dot').className = 'dot' + (state ? ' ' + state : '');
+  $('mic-label').textContent = label;
+}
+
+function stopMic() {
+  if (pc) { pc.close(); pc = null; }
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  setMic('', 'microphone off');
+  $('mic-btn').textContent = 'Start talking';
+  $('mic-btn').disabled = false;
+}
+
+$('mic-btn').onclick = async () => {
+  if (pc) { stopMic(); return; }
+
+  // getUserMedia only exists in a secure context. localhost counts; reaching
+  // this page over a LAN IP does not, and the failure is otherwise cryptic.
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    add('agent', 'This browser will not give me a microphone here. Open the ' +
+        'console at http://127.0.0.1:7860 (localhost counts as secure; a LAN ' +
+        'IP does not). You can still type below.');
+    return;
+  }
+
+  $('mic-btn').disabled = true;
+  setMic('busy', 'connecting…');
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({audio: true});
+  } catch (e) {
+    stopMic();
+    add('agent', 'I could not open the microphone (' + e.name + '). Check the ' +
+        'browser permission for this page. You can still type below.');
+    return;
+  }
+
+  try {
+    pc = new RTCPeerConnection();
+    stream.getTracks().forEach(t => pc.addTrack(t, stream));
+    pc.addTransceiver('audio', {direction: 'recvonly'});
+    pc.ontrack = (e) => {
+      let audio = document.getElementById('agent-audio');
+      if (!audio) {
+        audio = document.createElement('audio');
+        audio.id = 'agent-audio';
+        audio.autoplay = true;
+        document.body.appendChild(audio);
+      }
+      audio.srcObject = e.streams[0];
+      audio.play().catch(() => {
+        add('agent', 'Your browser blocked audio playback. Click anywhere on ' +
+            'this page and I will be audible.');
+      });
+    };
+    pc.onconnectionstatechange = () => {
+      if (!pc) return;
+      if (pc.connectionState === 'connected') {
+        setMic('on', 'listening — just talk');
+      } else if (['failed', 'disconnected', 'closed'].includes(pc.connectionState)) {
+        add('agent', 'The voice connection dropped (' + pc.connectionState + ').');
+        stopMic();
+      }
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    const answer = await post('/api/offer', {sdp: offer.sdp, type: offer.type});
+    await pc.setRemoteDescription(answer);
+
+    $('mic-btn').textContent = 'Stop talking';
+    $('mic-btn').disabled = false;
+    setMic('busy', 'connecting…');
+    add('agent', 'Microphone connected. Just talk — try "what does this page show?"');
+  } catch (e) {
+    stopMic();
+    add('agent', 'Could not start the voice session: ' + e.message);
+  }
+};
+
+async function poll() {
+  try {
+    const r = await fetch('/api/status');
+    const d = await r.json();
+    $('page-pill').textContent = d.title || d.url || 'no page';
+    $('s-pages').textContent = d.learned_pages ?? 0;
+    $('learn-dot').className = 'dot ' + (d.learning ? 'busy' : (d.learned_pages ? 'on' : ''));
+    $('learn-label').textContent = d.learning
+      ? 'learning the site…'
+      : (d.learned_pages ? d.learned_pages + ' pages learned' : 'not learning');
+    // Say plainly when voice is unavailable, instead of letting the operator
+    // discover it by clicking a button that cannot work.
+    if (!pc && d.voice_ready === false) {
+      setMic('', 'voice unavailable — type below');
+      $('mic-btn').disabled = true;
+      $('mic-btn').title = 'Speech models are not loaded. Run: uv run karumi doctor';
+    } else if (!pc && d.voice_ready && $('mic-btn').disabled) {
+      $('mic-btn').disabled = false;
+      setMic('', 'microphone off');
+    }
+    if (d.awaiting_login && !window.__loginNoted) {
+      window.__loginNoted = true;
+      add('agent', 'That page is showing a sign-in form. Sign in over in the ' +
+          'Chromium window and I will pick up from there — I never type ' +
+          'credentials myself. Everything else here keeps working meanwhile.');
+    }
+  } catch (e) { /* server still starting */ }
+}
+poll();
+setInterval(poll, 1500);
+</script>
+</body>
+</html>

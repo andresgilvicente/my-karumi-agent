@@ -1,0 +1,40 @@
+# Editorial configuration for the Metric Master Suite demo.
+#
+# This file may describe WHAT the demo is about. It may not describe HOW to
+# operate the page: no CSS selectors, no element ids, no coordinates, no route
+# paths, no ordered click scripts. The loader enforces this and will refuse to
+# start if any appear here (see src/karumi_agent/domain/demo.py and
+# tests/unit/test_demo_config.py).
+#
+# The agent finds everything by observing the live site, so this file stays
+# valid across redesigns.
+
+product_name: Metric Master Suite
+
+demo_goals:
+  - Show how quickly a team can read their key numbers
+  - Give a feel for how the different areas of the product fit together
+  - Leave the audience knowing what they could do here day to day
+
+# Subjects worth covering IF the live page turns out to have them. The agent
+# checks the page; it never assumes a theme exists because it is listed here.
+themes:
+  - Headline metrics and how they are trending
+  - Breaking results down by channel or segment
+  - Managing the people who have access
+  - Configuration and administrative controls
+
+approved_messages:
+  - Everything on screen reflects the current reporting period
+  - The layout is designed so the important numbers are visible immediately
+
+# Facts the operator has supplied. The agent may state these even though they
+# are not visible on the page.
+explicit_facts:
+  - This is a demonstration environment, so the figures are sample data
+
+claims_to_avoid:
+  - Do not quote pricing or discounts
+  - Do not name customers or reference real accounts
+  - Do not describe roadmap or unreleased functionality
+  - Do not state performance or uptime figures
