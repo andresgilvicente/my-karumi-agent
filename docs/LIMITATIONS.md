@@ -4,7 +4,47 @@ What is actually proven, what is assumed, and what is known not to work. Kept ho
 purpose: a demo agent that overstates its own reliability is the exact failure mode this
 project is built to avoid.
 
-Last updated at the end of **Phase 1**.
+Last updated at the end of **Phase 2**.
+
+---
+
+## 0. The second big one: the agent has never spoken to a real LLM
+
+**Status: unverified.**
+
+Phase 2 is built and its plumbing is tested, but this development environment has no
+Anthropic credentials — no `ANTHROPIC_API_KEY`, no `ant` profile, no SDK. Nothing here has
+ever run a model.
+
+What **is** proven, by `tests/integration/test_browser_worker.py` against a real bus and a
+real browser:
+
+- snapshots reach the bus in the exact shape `UIWorker.render_ui_state` reads
+- page changes keep producing snapshots without anyone asking
+- the `observe` and `act` jobs round-trip
+- a verified action comes back verified, with its observed changes and timings
+- a policy refusal comes back as a *result* the agent can explain, not an exception
+- a stale snapshot id is refused over the bus
+- a malformed tool call is reported, not raised — a bad call must not end the demo
+- acting republishes, so the model's next turn sees the effect of its own action
+
+What is **not** proven: that Claude Haiku 4.5 reasons well over a real `<ui_state>` — picks
+the right ref, resists narrating the whole page, and repeats an unverified result honestly
+instead of claiming success. That was the explicit question Phase 2 was meant to answer, and
+it remains open.
+
+**To close this gap**, with a key in `.env`:
+
+```bash
+uv run karumi text --url http://127.0.0.1:8899 --ask "What is this page about?"
+uv run karumi text --url http://127.0.0.1:8899 --ask "Show me the analytics section"
+uv run karumi text --url http://127.0.0.1:8899 --ask "Highlight the most important revenue metric"
+```
+
+Watch for three specific failures: the model inventing a ref that is not in the snapshot;
+the model reporting success after a result whose `verified` is false; and the model reading
+out the whole dashboard when asked about one number. Each has a different fix — tool schema,
+prompt, and prompt respectively — so it is worth knowing which one you have.
 
 ---
 
@@ -92,11 +132,24 @@ figures, not from this system. **Treat it as a hypothesis until Phase 3 measures
 - **Confirmation is not yet wired to a human.** `NEEDS_CONFIRMATION` is returned and the
   action is refused. The interactive approval loop arrives with the voice layer in Phase 3.
 
+### Worker layer (Phase 2)
+
+- **The `text` prompt loop is untested end to end** for the reason in §0. Every layer beneath
+  it is covered; the loop itself has only been run as far as the credential check.
+- **Sequential actions only.** The `act` job is serialised on purpose — two clicks racing on
+  one page make the before/after diff meaningless. A demo that wanted to fan out reads would
+  need a separate, read-only job.
+- **No confirmation round-trip yet.** A sensitive action returns `NEEDS_CONFIRMATION` and
+  stops. Asking the human and resuming needs a channel to ask on, which arrives with voice.
+- **Conversation history is not persisted.** `keep_history` is left at Pipecat's default, so
+  the model sees the current turn and the injected snapshot. Cross-turn memory ("the button
+  you showed me earlier") is a Phase 4 concern.
+
 ### Not yet built
 
-Phases 2–5 are unimplemented: there is no LLM in the loop, no voice, no editorial config
-consumption, and no Stage 2 URL learning. The `voice` extra installs the pipeline
-dependencies, but no code imports them yet.
+Phases 3–5 are unimplemented: no voice, no guided demo flow, and no Stage 2 URL learning.
+The `voice` extra installs the pipeline dependencies and the worker layer imports cleanly,
+but nothing constructs a transport yet.
 
 ---
 
@@ -112,6 +165,29 @@ dependencies, but no code imports them yet.
 - **Chromium build mismatch.** This environment ships Chromium 141 (build 1194) while
   Playwright 1.62 expects build 1234. The adapter auto-detects the preprovisioned binary. On a
   normal machine `uv run playwright install chromium` makes this moot.
+- **NLTK 3.10 vs. an in-project virtualenv.** NLTK's CWE-427 import guard blocks
+  NLTK-initiated imports of anything resolving inside the cwd, which is every package when
+  `.venv` sits in the project — the uv default. Pipecat imports NLTK, so every Pipecat import
+  from the project root fails without the shim in `workers/_pipecat.py`. Pipecat pins
+  `nltk>=3.10`, so there is no version to retreat to. Covered by
+  `tests/unit/test_pipecat_compat.py`.
+
+---
+
+## 4a. Two things Phase 2 corrected in Phase 1's work
+
+Recorded because both slightly weakened claims made earlier.
+
+- **Streamed snapshots never reached subscribers.** The page pushed snapshots on every
+  mutation and the adapter stored them, but only `observe(force=True)` ever notified
+  listeners — so nothing downstream saw a change until something asked. Phase 1 never
+  noticed because the spike always forced. Fixed by publishing on the push path; the
+  regression is pinned by `test_page_changes_produce_new_snapshots`.
+- **The fixture's "mutation pressure" was attribute-only.** Its heartbeat wrote a `dataset`
+  value, which accessibility walkers do not observe — so the tree was quiet and the Phase 1
+  claim that refs survive "while the page mutated" was softer than it sounded. The heartbeat
+  now removes and re-adds a real element. Re-running the spike against the harsher fixture
+  still gives **5/5 refs held across 25 snapshots**, so the claim now stands on its own.
 
 ---
 
@@ -129,11 +205,11 @@ dependencies, but no code imports them yet.
 
 ## 6. Next steps, in order
 
-1. **Run the spike against Metric Master Suite** and record the result here (§1).
-2. **Phase 2** — put a real LLM behind the snapshot and measure whether Haiku 4.5 reasons
-   reliably over `<ui_state>` at this size before considering a stronger model for the
-   interface path.
-3. **Replace the fixed settle delay** with adaptive waiting (§2).
+1. **Run `karumi text` with a real key** and record what the model actually does (§0). This
+   is the open question Phase 2 was built to answer.
+2. **Run the spike against Metric Master Suite** and record the result here (§1).
+3. **Replace the fixed settle delay** with adaptive waiting (§2) — the largest avoidable
+   number in the browser path.
 4. **Phase 3** — voice, and the first true end-to-end latency measurement. Publish the real
    P50/P90/P95 here whether or not they meet the sub-second target.
 5. **Add the local/free provider configuration** as a benchmark counterpart to the cloud

@@ -322,10 +322,51 @@ the source.
 |---|---|---|
 | 0 | Architecture document, limitations doc | **done** |
 | 1 | Browser spike: observe, act, verify, refuse — no voice | **done, 9/9 probes** |
-| 2 | UI Worker over text: Pipecat `UIWorker` + `BrowserWorker` on the bus, typed tools | next |
-| 3 | Voice: WebRTC, Flux, Haiku, Sonic, interruption, latency observer | |
+| 2 | UI Worker over text: Pipecat `UIWorker` + `BrowserWorker` on the bus, typed tools | **built; bus contract proven, LLM run outstanding** |
+| 3 | Voice: WebRTC, Flux, Haiku, Sonic, interruption, latency observer | next |
 | 4 | Guided Metric Master Suite demo with editorial config | |
 | 5 | Arbitrary URL: progressive exploration, semantic map, grounded answers | |
+
+### Phase 2 as built
+
+The central claim of §2.2 — that `UIWorker` accepts snapshots from any bus peer, not just
+its React client — is now demonstrated rather than inferred.
+`tests/integration/test_browser_worker.py` runs a real `WorkerRunner`, a real browser and a
+bus peer that receives exactly what `UIWorker` would, and asserts the payload carries the
+`root`/`captured_at`/`selection` shape its renderer reads.
+
+Three design decisions worth recording, because each closes off a failure mode rather than
+adding a feature:
+
+**Actions are jobs, not commands.** `UIWorker.send_command` is fire-and-forget. That suits a
+client that owns its own DOM, but a tool that cannot await its outcome cannot know whether to
+claim success — the exact thing this project forbids. Actions therefore travel as jobs and
+the response carries the verified `ActionResult`.
+
+**The worker stamps the snapshot id, never the model.** Every action is tagged with the page
+state the model was actually shown. Asking the model to echo an id back would add a failure
+mode with no upside: it knows nothing about freshness that the worker does not already know,
+and a wrong id either blocks a valid action or waves through a stale one.
+
+**Results are shrunk before they reach the context.** The model gets the verdict, the observed
+changes and the timings. Rects, attributes and full evidence go to the JSONL log, where they
+are useful for debugging and cost nothing per turn.
+
+### 8.1 An environment collision worth knowing about
+
+NLTK 3.10 installs a meta-path finder (CWE-427 mitigation) that blocks NLTK-initiated imports
+of modules resolving inside the current working directory. `uv` places its virtualenv at
+`.venv/` inside the project, so from the project root *every* installed package matches that
+description — and Pipecat imports NLTK, which imports `regex`, which is blocked. Any Pipecat
+import from the project root fails.
+
+Pipecat requires `nltk>=3.10`, so there is no version to pin away from, and relocating the
+virtualenv would impose an unusual layout on everyone who checks the repo out. The fix is to
+import the affected module first: a module already in `sys.modules` is returned from cache
+without consulting meta-path finders. It lives in `workers/_pipecat.py`, which is also the
+only module that touches Pipecat's private snapshot-event constant, and
+`tests/unit/test_pipecat_compat.py` runs from the project root so a future NLTK release that
+blocks something else fails a test instead of a demo.
 
 ---
 
