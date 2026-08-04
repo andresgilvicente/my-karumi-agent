@@ -44,7 +44,7 @@ page state before and after. The agent does not say "done" until the page agrees
 ## Setup
 
 ```bash
-uv sync                                   # Python deps (browser layer only)
+uv sync                                   # Python deps, incl. the agent framework
 uv run playwright install chromium        # skip if PLAYWRIGHT_BROWSERS_PATH is preprovisioned
 
 npm --prefix src/karumi_agent/browser/injected install
@@ -53,10 +53,11 @@ npm --prefix src/karumi_agent/browser/injected run build   # -> dist/karumi-page
 cp .env.example .env                      # fill in only what the phase you're running needs
 ```
 
-The voice stack is a separate extra so the browser layer stays installable on its own:
+The media stack (transports, speech services, turn detection) is a separate extra, so a
+text-mode install stays free of audio dependencies:
 
 ```bash
-uv sync --extra voice
+uv sync --extra voice          # Phase 3 onwards
 ```
 
 ## Running

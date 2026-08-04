@@ -6,10 +6,13 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 
-# Core dependencies cover Phase 1 (browser spike) and Phase 2 (text-driven UI
-# worker). The voice stack lives in the `voice` extra so the browser layer can
-# be developed, tested and run without pulling in the whole media pipeline.
+# Pipecat is a core dependency, not an optional one: its worker bus and UIWorker
+# are what the agent is built on, and Phase 2 uses them with no voice involved.
+# Pinned to the exact minor we researched — the UI Worker protocol constant we
+# publish under (`__ui_snapshot`) is private, so a floating pin could silently
+# stop snapshots reaching the model. See docs/ARCHITECTURE.md §7.2.
 dependencies = [
+    "pipecat-ai[anthropic]>=1.7.0,<1.8",
     "playwright>=1.55.0,<2",
     "pydantic>=2.9,<3",
     "pydantic-settings>=2.5,<3",
@@ -19,12 +22,16 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# Pinned to the exact minor we researched: the UI Worker protocol constants we
-# depend on (`__ui_snapshot`) are private, so a floating pin could silently
-# break snapshot delivery. See docs/ARCHITECTURE.md § Riesgos.
+# The media stack: transports, speech services and turn detection. Only Phase 3
+# onwards needs it, so a text-mode install stays free of audio dependencies.
 voice = [
-    "pipecat-ai[anthropic,cartesia,deepgram,local-smart-turn,runner,silero,webrtc]>=1.7.0,<1.8",
+    "pipecat-ai[cartesia,deepgram,local-smart-turn,runner,silero,webrtc]>=1.7.0,<1.8",
 ]
+
+# Alternative LLM providers. `providers/llm.py` imports these lazily, so a
+# missing one surfaces as an ImportError naming the extra to install.
+llm-openai = ["pipecat-ai[openai]>=1.7.0,<1.8"]
+llm-google = ["pipecat-ai[google]>=1.7.0,<1.8"]
 
 [project.scripts]
 karumi = "karumi_agent.cli:main"
