@@ -4,6 +4,8 @@
 
 # Karumi Agent
 
+**Development period:** July 2026
+
 ## 1. Introduction
 
 Karumi Agent is a local voice-guided demo of Metric Master Suite. It can hold a live conversation, present the product, and perform a deliberately small set of semantic actions in the connected React interface.
